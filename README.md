@@ -2,8 +2,8 @@
 
 AI-powered revenue recovery engine for Razorpay **Test Mode** (Buildathon Track 03: AI Revenue Recovery).
 
-> Status: Phase 2 (Razorpay integration). The architecture, ground rules, and money-action
-> invariants live in [CLAUDE.md](CLAUDE.md) — read that first.
+> Status: Phase 3 (Data). The architecture, ground rules, and money-action invariants
+> live in [CLAUDE.md](CLAUDE.md) — read that first.
 
 ## Quickstart
 
@@ -55,3 +55,36 @@ it against `api.razorpay.com/v1` with real `rzp_test_` credentials. This environ
 not have Razorpay test-mode credentials, so that live proof has not been run and this PR
 does not claim it has. Running it (and recording the `payment_id` as evidence per the
 razorpay-testmode skill) is tracked as follow-up work once credentials are available.
+
+## Synthetic data (Phase 3)
+
+**This is synthetic data for demo/eval purposes — it is not real Razorpay traffic.**
+`core/ingest/synthetic.py` generates 600 fabricated at-risk records so later phases
+(diagnosis, policy, eval) have something to run against before live volume exists. Every
+record carries `source: "synthetic"` as a real schema field, not just a doc claim, so
+nothing downstream can present it as a live payment.
+
+The 600 records split evenly across four cohorts (150 each):
+
+- `one_time_checkout_failure` — a single hard card/UPI decline
+- `checkout_abandonment` — customer never completed auth/collect (cancelled, timed out)
+- `subscription_mandate_failure` — recurring card/eMandate or UPI Autopay debit failure
+- `overdue_b2b_invoice` — a net-terms invoice past due, with no gateway attempt at all
+
+`error_code`/`error_reason` values are drawn **only** from the verified catalog in
+[`.claude/skills/razorpay-testmode/SKILL.md`](.claude/skills/razorpay-testmode/SKILL.md)
+§5 (cards) and §6 (UPI) — nothing from its §7 banned/unverified list is ever used. Each
+record also carries `true_root_cause`, a closed-taxonomy ground-truth label the generator
+alone knows (it authored the scenario); the not-yet-built diagnosis path only ever sees
+`error_code`/`error_reason`/free text, exactly like it would for a real payment —
+`true_root_cause` exists purely so a future held-out evaluation can score itself honestly.
+
+The split is deterministic: `get_settings().split_seed` (`42`) seeds the generator, and
+exactly 200 of the 600 records are marked `held_out: true` as a pure function of that seed
+— the same seed always produces the same held-out set.
+
+```bash
+recoup generate-synthetic-data          # generate + persist 600 records, one ledger
+                                         # event per insert; no-ops if data already exists
+recoup generate-synthetic-data --force  # wipe and regenerate instead of skipping
+```

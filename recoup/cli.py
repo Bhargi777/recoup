@@ -5,6 +5,7 @@ from sqlmodel import Session
 
 from core import __version__
 from core.config import get_settings
+from core.ingest.synthetic import init_synthetic_schema, run_generation
 from core.ledger import get_engine, init_ledger_schema, verify_chain
 
 app = typer.Typer(
@@ -79,6 +80,42 @@ def verify_chain_command() -> None:
     for err in result.errors:
         typer.echo(f"  {err}")
     raise typer.Exit(code=1)
+
+
+@app.command(name="generate-synthetic-data")
+def generate_synthetic_data(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Delete existing synthetic records first and regenerate (avoids silent duplication).",
+    ),
+) -> None:
+    """Generate the Phase 3 synthetic at-risk-payment backfill (600 records, 4 cohorts).
+
+    Refuses to run a second time (no-op) unless --force is passed, so a repeat
+    invocation never silently doubles the dataset. All 600 records carry
+    source: "synthetic" and each insert emits a SYNTHETIC_RECORD_INGESTED
+    ledger event.
+    """
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    init_ledger_schema(engine)
+    init_synthetic_schema(engine)
+
+    with Session(engine) as session:
+        result = run_generation(session, seed=settings.split_seed, force=force)
+
+    if result.skipped:
+        typer.secho(
+            "synthetic data already present; skipped (pass --force to regenerate)",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(code=0)
+
+    typer.secho(f"generated {result.inserted} synthetic records", fg=typer.colors.GREEN)
+    for cohort, count in sorted(result.cohort_counts.items()):
+        typer.echo(f"  {cohort:<28}: {count}")
+    typer.echo(f"  {'held_out':<28}: {result.held_out_count}")
 
 
 if __name__ == "__main__":
