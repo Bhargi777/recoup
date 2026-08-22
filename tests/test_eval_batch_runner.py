@@ -141,6 +141,40 @@ def test_report_has_elapsed_time_and_all_summary_fields(session, settings):
         assert key in d
 
 
+def test_abstained_records_are_excluded_from_the_comparison(session, settings):
+    """A record the deterministic mapper cannot resolve, with no configured
+    LLM key (this environment has none - see core.diagnose.llm_classifier),
+    honestly abstains rather than being force-fit into treatment or control."""
+    unresolvable = AtRiskRecord(
+        id="synth_unresolvable_0001",
+        cohort="one_time_checkout_failure",
+        source="synthetic",
+        true_root_cause="card_declined_generic",
+        payment_method="card",
+        error_code="BAD_REQUEST_ERROR",
+        error_reason="totally_unmapped_error_reason_xyz",
+        error_source="issuer_bank",
+        amount_inr=1000.0,
+        customer_id="cust_unresolvable",
+        created_at="2026-05-01",
+        held_out=False,
+        notes="some free text the LLM path would need to classify",
+        metadata_json="{}",
+    )
+    session.add(unresolvable)
+    session.commit()
+
+    report = run_batch(session, mode="dry_run", settings=settings)
+
+    assert report.abstained == 1
+    assert report.treatment_count == 0
+    assert report.control_count == 0
+
+    types = [e.event_type for e in list_events(session) if e.aggregate_id == unresolvable.id]
+    assert "BATCH_RECORD_ABSTAINED" in types
+    assert "EXPERIMENT_GROUP_ASSIGNED" not in types
+
+
 def test_rejects_unknown_mode(session, settings):
     with pytest.raises(ValueError):
         run_batch(session, mode="not_a_real_mode", settings=settings)
