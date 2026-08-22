@@ -2,7 +2,13 @@ import pytest
 from sqlmodel import Session
 
 from core.ledger.models import GENESIS_HASH
-from core.ledger.store import append_event, get_engine, init_ledger_schema, list_events
+from core.ledger.store import (
+    append_event,
+    events_for_aggregate,
+    get_engine,
+    init_ledger_schema,
+    list_events,
+)
 
 
 @pytest.fixture()
@@ -40,3 +46,14 @@ def test_list_events_returns_ascending_order(session: Session) -> None:
 def test_payload_is_canonicalized_on_write(session: Session) -> None:
     event = append_event(session, "pay_1", "EVENT", {"z": 1, "a": 2})
     assert event.payload_json == '{"a":2,"z":1}'
+
+
+def test_events_for_aggregate_filters_and_preserves_order(session: Session) -> None:
+    append_event(session, "pay_1", "INGESTED", {})
+    append_event(session, "pay_2", "INGESTED", {})
+    append_event(session, "pay_1", "DIAGNOSED", {})
+    append_event(session, "pay_1", "ACTION_TAKEN", {})
+
+    events = events_for_aggregate(session, "pay_1")
+    assert [e.event_type for e in events] == ["INGESTED", "DIAGNOSED", "ACTION_TAKEN"]
+    assert all(e.aggregate_id == "pay_1" for e in events)

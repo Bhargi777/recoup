@@ -68,3 +68,17 @@ def append_event(
 def list_events(session: Session) -> list[LedgerEvent]:
     statement = select(LedgerEvent).order_by(LedgerEvent.sequence_num.asc())
     return list(session.exec(statement).all())
+
+
+def events_for_aggregate(session: Session, aggregate_id: str) -> list[LedgerEvent]:
+    """All events for one aggregate (e.g. a customer or payment) in sequence order.
+
+    Used by state-replay projections (per-customer cooldowns, retry counts) so
+    they never have to scan the full ledger to answer one aggregate's history.
+    """
+    statement = (
+        select(LedgerEvent)
+        .where(LedgerEvent.aggregate_id == aggregate_id)
+        .order_by(LedgerEvent.sequence_num.asc())
+    )
+    return list(session.exec(statement).all())
