@@ -2,7 +2,7 @@
 
 AI-powered revenue recovery engine for Razorpay **Test Mode** (Buildathon Track 03: AI Revenue Recovery).
 
-> Status: Phase 4 (Diagnosis). The architecture, ground rules, and money-action invariants
+> Status: Phase 5 (Policy Engine). The architecture, ground rules, and money-action invariants
 > live in [CLAUDE.md](CLAUDE.md) — read that first.
 
 ## Quickstart
@@ -175,3 +175,103 @@ paths are real, tested code (`tests/test_diagnose_orchestrator.py`,
 particular dataset, because no held-out record is ambiguous enough to need them. That
 is documented here rather than forced by inventing a fake ambiguous case just to make
 the coverage report show a non-zero LLM number.
+
+## Policy engine (Phase 5)
+
+`core/policy` is the **deterministic decision core**: the only place in this codebase
+allowed to decide whether a money action may proceed. Per CLAUDE.md §4, no LLM is called
+anywhere in this module or anything it imports — every rule here is plain Python/YAML.
+
+**1. Playbooks (`core/policy/playbooks/*.yaml`)** — one YAML file per root-cause label in
+the closed taxonomy (`core.ingest.synthetic.ROOT_CAUSE_MAP` + `invoice_overdue`, 16
+labels total). Each playbook declares `trigger_conditions.cohorts`, an ordered
+`intervention_ladder` (`reminder_message` → `payment_link` → `incentive_offer` →
+`escalate_to_human`, each with a `T+<offset>` timing), a hard `incentive_ceiling`
+(`overdue_b2b_invoice`'s is a real enforced `0`, never a comment), `max_attempts`, and
+`stopping_rules`. `core/policy/schema.py` validates every playbook against a Pydantic
+model at load time — an unknown cohort, unknown step, malformed offset, or
+out-of-range ceiling fails loudly (`PlaybookLoadError`), never silently no-ops.
+`core/policy/loader.py`'s `validate_taxonomy_completeness` asserts a 1:1 mapping between
+playbooks and taxonomy labels in both directions.
+
+**2. The 10 guardrail checks (`core/policy/guardrails.py`)** — every check from
+[`.claude/skills/money-action-gate/SKILL.md`](.claude/skills/money-action-gate/SKILL.md)
+§1 is its own independently testable function: idempotency verification, global budget
+meter, cohort incentive ceiling, customer/NPCI attempt limits, cooldown interval, quiet
+hours (DND), RBI e-mandate pre-debit notice, NPCI peak-hour restriction, kill switch, and
+ledger-writability (the pre-action-event readiness check).
+
+**3. Replay-based kill switch and budget meter** — per the audit-ledger state-replay
+contract, neither is a separate mutable table. The kill switch's state is whichever of
+`KILL_SWITCH_ACTIVATED` / `KILL_SWITCH_DEACTIVATED` has the highest `sequence_num`
+(`core/policy/kill_switch.py`); the budget meter's current spend is `sum()` over
+`INCENTIVE_COMMITTED` event payloads, globally or filtered by cohort
+(`core/policy/budget.py`). `recoup kill-switch on|off|status` proves this in practice —
+the same way `recoup verify-chain` proves the hash chain:
+
+```bash
+recoup kill-switch status              # replays the ledger, reports INACTIVE/ACTIVE
+recoup kill-switch on --reason "..."   # appends KILL_SWITCH_ACTIVATED, then reports state
+recoup kill-switch off --reason "..."  # appends KILL_SWITCH_DEACTIVATED, then reports state
+```
+
+**4. The composed gate (`core/policy/gate.py`)** — `evaluate_gate(session, context)`
+runs all 10 checks **exhaustively** (not short-circuiting): every check always runs, and
+every individual result — pass or fail — is written to the ledger as
+`POLICY_GATE_EVALUATED`, followed by one `POLICY_GATE_DECISION` event for the overall
+outcome. This is deliberate: the skill spec requires every check's decision on the
+ledger, and an operator debugging a denial benefits from seeing every reason at once
+(e.g. "over budget AND in a DND window") rather than only the first. Only on an overall
+`ALLOW` does `evaluate_gate` append `MONEY_ACTION_INTENT` — strictly before returning to
+the caller (checklist item #10, "before any hypothetical execution") — and, if an
+incentive is involved, `INCENTIVE_COMMITTED`. `MONEY_ACTION_INTENT` also doubles as the
+single append-only source that idempotency, attempt-count, and cooldown replay from, so
+there is exactly one record of "an action was approved here", not a parallel table.
+
+This phase does not execute anything — `core/act/` does not exist yet. `evaluate_gate`
+only ever returns ALLOW/DENY; nothing here calls Razorpay or sends a message.
+
+## Regulatory constraints (Phase 5)
+
+Researched 2026-08-22 with live web search/fetch against primary and secondary sources.
+Per CLAUDE.md's zero-fabrication rule, anything not independently verified from an
+authoritative source is marked as such below rather than encoded as if it were
+confirmed.
+
+**Verified — RBI e-mandate pre-debit notification, 24 hours.** Fetched directly from
+rbi.org.in: the *Digital Payments – E-mandate Framework, 2026*
+(RBI/DPSS/2026-27/396, dated 2026-04-21, which consolidates and repeals eight prior
+e-mandate circulars issued since 2019) states: *"An issuer shall send a pre-transaction
+notification to the customer, at least 24 hours prior to the actual charge / debit."*
+This is encoded as `rbi_emandate_pre_debit_notice_hours = 24.0` in `core/config.py` and
+enforced by `check_rbi_pre_debit_notice` in `core/policy/guardrails.py`.
+Source: https://rbi.org.in/scripts/NotificationUser.aspx?Mode=0&Id=13374
+
+**Best-effort / unverified — NPCI UPI AutoPay max attempts (4) and peak-hour windows
+(10:00–13:00, 17:00–21:30 IST).** Multiple independent secondary sources (payments-
+industry blogs and news coverage, not NPCI's own text) consistently describe an NPCI
+tightening effective 2025-08-01: each AutoPay mandate gets one original execution plus
+three retries (4 total) before auto-cancellation, and execution is prohibited during
+"peak" windows of 10:00–13:00 and 17:00–21:30 IST. Sources found:
+- https://gokiwi.in/blog/major-changes-by-npci-on-upi-in-2025/
+- https://paytm.com/blog/payments/upi/upi-rules-update-august-1-npci-new-guidelines/
+- https://ibsintelligence.com/ibsi-news/npci-tightens-upi-api-rules-to-boost-resilience-fraud-controls/
+
+Attempts to fetch NPCI's own operating circular PDFs directly (e.g.
+`UPI_OC_No_223_FY_2025_26_Enhancement_of_UPI_Autopay...pdf` and the
+`npci.org.in/what-we-do/upi/circular` index) returned HTTP 403 in this environment, so
+the exact circular text could not be independently confirmed. These numbers therefore
+match CLAUDE.md §3's stated constraints and are corroborated by consistent, converging
+secondary reporting, but are treated as **conservative defaults, not confirmed primary-
+source numbers** — encoded as `npci_upi_autopay_max_attempts = 4` (env-overridable in
+`core/config.py`) and the `NPCI_PEAK_WINDOWS_IST` constant in
+`core/policy/guardrails.py`, both commented accordingly. Before this policy engine
+governs a real money action against these thresholds, someone with authenticated/direct
+access to npci.org.in should confirm the exact operating circular text.
+
+**Not regulatory — communication cooldown (6 hours).** There is no RBI/NPCI rule
+governing a generic minimum gap between two dunning/reminder messages. `default_
+cooldown_hours = 6.0` is adopted directly from
+`.claude/skills/money-action-gate/SKILL.md`'s own worked example (item 5 of the
+checklist table) as a reasonable, fully configurable default — not presented as a
+regulatory requirement anywhere in code or docs.
