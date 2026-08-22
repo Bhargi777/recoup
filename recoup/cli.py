@@ -8,6 +8,7 @@ from core.config import get_settings
 from core.eval.diagnosis_eval import evaluate_holdout
 from core.ingest.synthetic import init_synthetic_schema, run_generation
 from core.ledger import get_engine, init_ledger_schema, verify_chain
+from core.policy import activate_kill_switch, deactivate_kill_switch, is_kill_switch_active
 
 app = typer.Typer(
     name="recoup",
@@ -153,6 +154,45 @@ def eval_diagnosis() -> None:
     typer.echo("  confusion matrix (true -> {predicted: count}):")
     for true_label, preds in sorted(report.confusion_matrix.items()):
         typer.echo(f"    {true_label}: {dict(sorted(preds.items()))}")
+
+
+@app.command(name="kill-switch")
+def kill_switch_command(
+    action: str = typer.Argument(..., help="One of: on, off, status"),
+    reason: str = typer.Option(
+        "", "--reason", help="Why the switch is being toggled (recorded on the ledger event)."
+    ),
+) -> None:
+    """Toggle or inspect the emergency kill switch.
+
+    State is never stored in a mutable column - it is recomputed every time
+    by replaying KILL_SWITCH_ACTIVATED / KILL_SWITCH_DEACTIVATED ledger
+    events (same replay contract as `recoup verify-chain`), so this command
+    doubles as a live proof that replay works.
+    """
+    action = action.lower()
+    if action not in {"on", "off", "status"}:
+        typer.secho(
+            f"unknown action {action!r}; must be one of: on, off, status", fg=typer.colors.RED
+        )
+        raise typer.Exit(code=1)
+
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    init_ledger_schema(engine)
+
+    with Session(engine) as session:
+        if action == "on":
+            activate_kill_switch(session, reason or "no reason given")
+            typer.secho("kill switch ACTIVATED", fg=typer.colors.RED)
+        elif action == "off":
+            deactivate_kill_switch(session, reason or "no reason given")
+            typer.secho("kill switch DEACTIVATED", fg=typer.colors.GREEN)
+
+        active = is_kill_switch_active(session)
+
+    color = typer.colors.RED if active else typer.colors.GREEN
+    typer.secho(f"kill switch is currently {'ACTIVE' if active else 'INACTIVE'}", fg=color)
 
 
 if __name__ == "__main__":
