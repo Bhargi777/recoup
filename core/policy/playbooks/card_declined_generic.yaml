@@ -1,0 +1,25 @@
+root_cause: card_declined_generic
+trigger_conditions:
+  cohorts:
+    - one_time_checkout_failure
+intervention_ladder:
+  - step: reminder_message
+    offset: "T+0"
+    channel: sms
+  - step: payment_link
+    offset: "T+4h"
+    channel: email
+  - step: incentive_offer
+    offset: "T+72h"
+    notes: "Undifferentiated decline; small incentive to try a different instrument."
+  - step: escalate_to_human
+    offset: "T+120h"
+incentive_ceiling:
+  type: amount_inr
+  value: 100
+max_attempts: 4
+stopping_rules:
+  - already_paid
+  - max_attempts_reached
+  - customer_opted_out
+  - kill_switch_active

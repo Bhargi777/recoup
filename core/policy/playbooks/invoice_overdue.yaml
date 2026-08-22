@@ -1,0 +1,22 @@
+root_cause: invoice_overdue
+trigger_conditions:
+  cohorts:
+    - overdue_b2b_invoice
+intervention_ladder:
+  - step: reminder_message
+    offset: "T+0"
+    channel: email
+  - step: payment_link
+    offset: "T+24h"
+    channel: email
+  - step: escalate_to_human
+    offset: "T+168h"
+incentive_ceiling:
+  type: amount_inr
+  value: 0
+max_attempts: 4
+stopping_rules:
+  - invoice_settled
+  - max_attempts_reached
+  - customer_opted_out
+  - kill_switch_active
