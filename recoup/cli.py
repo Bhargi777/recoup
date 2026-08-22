@@ -5,7 +5,9 @@ from sqlmodel import Session
 
 from core import __version__
 from core.config import get_settings
+from core.eval.batch_runner import run_batch
 from core.eval.diagnosis_eval import evaluate_holdout
+from core.ingest.razorpay_client import RazorpayClient
 from core.ingest.synthetic import init_synthetic_schema, run_generation
 from core.ledger import get_engine, init_ledger_schema, verify_chain
 from core.policy import activate_kill_switch, deactivate_kill_switch, is_kill_switch_active
@@ -193,6 +195,85 @@ def kill_switch_command(
 
     color = typer.colors.RED if active else typer.colors.GREEN
     typer.secho(f"kill switch is currently {'ACTIVE' if active else 'INACTIVE'}", fg=color)
+
+
+@app.command(name="run-batch")
+def run_batch_command(
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help=(
+            "Make real Razorpay API calls for payment_link actions "
+            "(will fail auth in this environment - no real rzp_test_ credentials). "
+            "Default is --dry-run: the full decision pipeline runs but nothing external "
+            "is ever called."
+        ),
+    ),
+) -> None:
+    """Run the Phase 6 batch orchestrator over the synthetic at-risk dataset:
+    diagnose -> deterministic holdout assignment -> policy gate -> execute
+    (treatment only) -> simulated outcome.
+
+    Self-contained like `eval-diagnosis`: generates the synthetic dataset
+    first if the database is empty.
+
+    IMPORTANT: the uplift and recovery-rate numbers this command prints are
+    computed over a SIMULATED outcome model (core.experiment.simulated_outcome),
+    not real observed Razorpay payments - there are no live test-mode
+    credentials or real customer traffic in this environment. That qualifier
+    is not optional decoration; read core.experiment.simulated_outcome's
+    module docstring before trusting or requoting any number below.
+    """
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    init_ledger_schema(engine)
+    init_synthetic_schema(engine)
+
+    mode = "live" if live else "dry_run"
+
+    with Session(engine) as session:
+        run_generation(session, seed=settings.split_seed, force=False)
+
+        client = None
+        if live:
+            client = RazorpayClient(settings.razorpay_key_id, settings.razorpay_key_secret, session)
+        try:
+            report = run_batch(session, mode=mode, settings=settings, razorpay_client=client)
+        finally:
+            if client is not None:
+                client.close()
+
+    typer.secho(
+        f"run-batch ({mode}) complete in {report.elapsed_seconds:.2f}s", fg=typer.colors.CYAN
+    )
+    typer.echo(f"  records processed     : {report.total_records}")
+    typer.echo(f"  diagnosis abstained    : {report.abstained}")
+    typer.echo(
+        f"  treatment / control    : {report.treatment_count} / {report.control_count} "
+        f"(actual control % = {report.actual_control_percent:.2f})"
+    )
+    typer.echo(f"  blocked by gate        : {report.blocked_count}")
+    for reason, count in sorted(report.blocked_reasons.items()):
+        typer.echo(f"    {reason:<28}: {count}")
+    typer.echo("  executed actions:")
+    for action_type, count in sorted(report.executed_action_counts.items()):
+        typer.echo(f"    {action_type:<28}: {count}")
+
+    typer.secho(
+        "  ** uplift below is computed over a SIMULATED outcome model "
+        "(core.experiment.simulated_outcome) - NOT real observed Razorpay payments **",
+        fg=typer.colors.YELLOW,
+    )
+    u = report.uplift
+    typer.echo(
+        f"  [SIMULATED] treatment recovery rate: {u.treatment.point_estimate:.4f} "
+        f"(95% Wilson CI {u.treatment.lower:.4f}-{u.treatment.upper:.4f}, n={u.treatment.n})"
+    )
+    typer.echo(
+        f"  [SIMULATED] control recovery rate  : {u.control.point_estimate:.4f} "
+        f"(95% Wilson CI {u.control.lower:.4f}-{u.control.upper:.4f}, n={u.control.n})"
+    )
+    typer.echo(f"  [SIMULATED] uplift (treatment - control): {u.uplift:+.4f}")
 
 
 if __name__ == "__main__":

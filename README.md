@@ -2,8 +2,8 @@
 
 AI-powered revenue recovery engine for Razorpay **Test Mode** (Buildathon Track 03: AI Revenue Recovery).
 
-> Status: Phase 5 (Policy Engine). The architecture, ground rules, and money-action invariants
-> live in [CLAUDE.md](CLAUDE.md) — read that first.
+> Status: Phase 6 (Execution + Experiment). The architecture, ground rules, and money-action
+> invariants live in [CLAUDE.md](CLAUDE.md) — read that first.
 
 ## Quickstart
 
@@ -228,8 +228,147 @@ incentive is involved, `INCENTIVE_COMMITTED`. `MONEY_ACTION_INTENT` also doubles
 single append-only source that idempotency, attempt-count, and cooldown replay from, so
 there is exactly one record of "an action was approved here", not a parallel table.
 
-This phase does not execute anything — `core/act/` does not exist yet. `evaluate_gate`
-only ever returns ALLOW/DENY; nothing here calls Razorpay or sends a message.
+Phase 5 itself does not execute anything — `evaluate_gate` only ever returns ALLOW/DENY;
+nothing in `core/policy` calls Razorpay or sends a message. Execution is Phase 6, below.
+
+## Execution + Experiment (Phase 6)
+
+Phase 6 adds the pieces downstream of the gate: **executors** that actually do something
+with an ALLOW decision, a **deterministic randomized holdout** so "did the intervention
+help" is a real question with a real answer, and a **statistically correct uplift +
+Wilson-CI pipeline** to answer it. Read this section's last subsection
+("Honesty of the numbers below") before quoting anything from it.
+
+### Action executors (`core/act/`)
+
+One executor per intervention-ladder step type in `core.policy.schema.KNOWN_STEPS`
+(`core/act/executors.py`). Every executor takes the gate's already-computed
+`PolicyDecision` and **refuses to run** — a real, tested code path, not an assumed
+precondition — if `allowed` is not `True`. Every call, refused or not, emits exactly one
+ledger event:
+
+| Step | What it does | Ledger event |
+| :-- | :-- | :-- |
+| `reminder_message` | Drafts a deterministic template message (`core/act/templates.py`) keyed by root cause. No LLM. Not dispatched — no SMS/email gateway is integrated in this codebase. | `ACTION_MESSAGE_DRAFTED` |
+| `incentive_offer` | Same as above, with the incentive amount/percent from the `GateContext`. | `ACTION_MESSAGE_DRAFTED` |
+| `pre_debit_notification` | Same template mechanism, RBI e-mandate notice text. | `ACTION_MESSAGE_DRAFTED` |
+| `mandate_retry` | Ledger-only: Phase 2's verified `RazorpayClient` surface has no mandate-retry-trigger endpoint, so this records the retry as SCHEDULED rather than fabricating a dispatch. | `ACTION_MANDATE_RETRY_SCHEDULED` |
+| `escalate_to_human` | Writes to the human exception queue. No external call. | `EXCEPTION_QUEUE_ENQUEUED` |
+| `payment_link` | **The only executor with a real external integration.** `--dry-run`: never constructs or touches a `RazorpayClient` — logs what would have been sent. `--live`: calls the real, unmodified `RazorpayClient.create_payment_link` from Phase 2. | `ACTION_SIMULATED_DRY_RUN` or `ACTION_PAYMENT_LINK_EXECUTED_LIVE` |
+| refused (any step) | Gate did not allow it. | `ACTION_REFUSED_NOT_ALLOWED` |
+
+Every executor has a matching `rollback_*`/`compensate_*` handler
+(money-action-gate SKILL.md §3). `payment_link`'s compensation is ledger-side only:
+Razorpay's Test Mode payment-links API has no verified cancel endpoint in
+[`.claude/skills/razorpay-testmode/SKILL.md`](.claude/skills/razorpay-testmode/SKILL.md)'s
+catalog, and none is fabricated here — `rollback_payment_link` marks the link cancelled in
+the audit trail so downstream attempt/cooldown/budget logic treats it as inactive.
+`tests/test_act_executors.py::test_payment_link_dry_run_never_touches_http_layer` proves
+the dry-run guarantee with an `httpx.MockTransport` spy that fails the test if it is ever
+called.
+
+### Deterministic holdout (`core/experiment/holdout.py`)
+
+`assign_group(customer_id, holdout_percent, seed)` hashes `f"{seed}:{customer_id}"` with
+SHA-256 and buckets the result into `"treatment"`/`"control"` — a pure function with no
+database read, so the same customer lands in the same group on every run, forever, for a
+given seed. **The control group never reaches the policy gate or any executor — enforced
+in `core.eval.batch_runner.run_batch`, not just documented** (see
+`tests/test_eval_batch_runner.py::test_control_arm_never_reaches_gate_or_executor`).
+
+### Simulated outcome + uplift + Wilson CI (`core/experiment/`)
+
+`simulated_outcome.py` is an explicitly labeled **simulation**: this environment has no
+real Razorpay test-mode credentials and no real customer payment behavior to observe (a
+gap confirmed since Phase 2), so there is no honest way to know whether any synthetic
+customer "really" recovered. The module's docstring states in capital letters that it is
+not real payment behavior. It assigns each root cause an illustrative baseline recovery
+rate (control-arm expectation) and applies a flat **+8 percentage point** illustrative
+treatment uplift — both documented as assumptions, not measurements. Every outcome this
+module's caller records to the ledger carries `outcome_source: "simulated"`
+(mirroring Phase 3's `source: "synthetic"` field), and
+`tests/test_eval_batch_runner.py::test_every_simulated_outcome_event_is_labeled` fails the
+build if that label is ever dropped.
+
+`core/experiment/stats.py` implements the **Wilson score interval** (not a normal
+approximation) per
+[`.claude/skills/honest-metrics/SKILL.md`](.claude/skills/honest-metrics/SKILL.md) §3,
+verified in `tests/test_experiment_stats.py` against a hand-computable textbook reference
+case (n=10, k=8 → 95% CI ≈ (0.49, 0.94)). `core/experiment/uplift.py` composes both arms'
+intervals into an `UpliftReport`.
+
+### The batch orchestrator (`recoup run-batch`)
+
+```bash
+recoup run-batch            # --dry-run is the default: full pipeline, nothing external called
+recoup run-batch --live     # real RazorpayClient calls for payment_link (will fail auth here)
+```
+
+For every one of the 600 synthetic records: `diagnose()` → `assign_group()` → if
+**control**: log `HOLDOUT_NO_INTERVENTION` + a simulated outcome, **stop — no gate, no
+executor call**. If **treatment**: gate the *first* intervention-ladder step of that
+record's root-cause playbook (every committed playbook's first step is `T+0`; walking the
+full multi-day ladder would require simulating the passage of time across multiple runs,
+out of scope for one batch pass) → if allowed, run the matching executor and log a
+simulated outcome; if blocked, log the block reason into a **separate bucket, excluded
+from the treatment/control comparison** (never counted as "did not recover" —
+honest-metrics SKILL.md §5).
+
+`--live` constructs a real `RazorpayClient` against `api.razorpay.com` — genuine code,
+not a stub. Within this dataset's first-touch scope no record's *first* ladder step
+happens to be `payment_link` (verified: every playbook's step 0 is `reminder_message`
+except `risk_blocked`'s, which is `escalate_to_human`), so this specific 600-record batch
+run does not itself trigger a live HTTP call either way. The live `payment_link` path
+itself is exercised directly (mocked transport) in
+`tests/test_act_executors.py::test_payment_link_live_calls_client_and_logs_executed`, and
+was manually re-confirmed during Phase 6 development with a real, unmocked HTTPS request
+to `api.razorpay.com` using dummy `rzp_test_` credentials, which returned a real
+`401 {"error":{"code":"BAD_REQUEST_ERROR","description":"Authentication failed"}}` —
+the same failure mode Phase 2's PR already established, not fabricated here.
+
+### A real, timed run (not estimated)
+
+Run on this branch against a fresh database, `recoup run-batch` (`--dry-run`, the
+default):
+
+```
+run-batch (dry_run) complete in 51.94s
+  records processed     : 600
+  diagnosis abstained    : 0
+  treatment / control    : 516 / 84 (actual control % = 14.00)
+  blocked by gate        : 0
+  executed actions:
+    escalate_to_human           : 4
+    reminder_message            : 512
+  ** uplift below is computed over a SIMULATED outcome model
+     (core.experiment.simulated_outcome) - NOT real observed Razorpay payments **
+  [SIMULATED] treatment recovery rate: 0.3798 (95% Wilson CI 0.3390-0.4225, n=516)
+  [SIMULATED] control recovery rate  : 0.3214 (95% Wilson CI 0.2313-0.4272, n=84)
+  [SIMULATED] uplift (treatment - control): +0.0584
+```
+
+`blocked by gate: 0` is itself an honest result, not a cherry pick: with zero incentive
+spend on every first-touch action in this dataset (first steps are never
+`incentive_offer`) and a clean idempotency key per record, nothing in this particular pass
+trips a guardrail. The gate's block path is real and tested directly —
+`tests/test_eval_batch_runner.py::test_blocked_records_are_tracked_separately_from_the_comparison`
+forces every treatment action to be blocked by activating the kill switch first, and
+asserts the blocked bucket is populated and excluded from the comparison.
+
+### Honesty of the numbers above
+
+**Every uplift and recovery-rate figure above is computed over
+`core.experiment.simulated_outcome` — a labeled simulation, not observed real Razorpay
+payment behavior.** There is no real customer traffic or live test-mode credentials in
+this environment to measure a real uplift against. This is not fabrication: fabrication
+would be presenting `+0.0584` as real recovered revenue. What is real and independently
+verifiable here is the *mechanism* — a genuine deterministic diagnosis, a genuine
+deterministic randomized holdout split, a genuine 10-check policy gate, genuine-or-honestly-
+simulated executors, and a correctly implemented Wilson-CI uplift calculation — exercised
+end to end against synthetic inputs, exactly like Phase 3's synthetic data and Phase 4's
+synthetic held-out eval already were. `records processed: 600`, `51.94s`, and the
+treatment/control counts above are real measurements of a real run of this code, not
+estimates.
 
 ## Regulatory constraints (Phase 5)
 
