@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,11 +10,13 @@ from core.config import reset_settings_cache
 from core.ingest.webhooks import EVENT_ID_HEADER, SIGNATURE_HEADER
 from core.ledger import get_engine, list_events
 
-SECRET = "dummy_webhook_secret_for_ci"
-
 
 def _sign(body: bytes) -> str:
-    return hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
+    # Read live: RAZORPAY_WEBHOOK_SECRET may be set by conftest's default or
+    # overridden by the CI workflow env - either way it must match whatever
+    # the running app actually validates against.
+    secret = os.environ["RAZORPAY_WEBHOOK_SECRET"]
+    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
 @pytest.fixture()
