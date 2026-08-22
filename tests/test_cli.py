@@ -39,6 +39,20 @@ def test_check_config_never_prints_full_key():
         reset_settings_cache()
 
 
+def test_serve_fails_fast_on_bad_key_before_binding_a_port(monkeypatch):
+    from core.config import reset_settings_cache
+
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_live_should_never_boot")
+    reset_settings_cache()
+    try:
+        result = runner.invoke(app, ["serve"])
+        assert result.exit_code != 0
+        assert "rzp_test_" in str(result.exception) or "rzp_test_" in result.output
+    finally:
+        monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_dummy_key_id_for_ci")
+        reset_settings_cache()
+
+
 def test_verify_chain_on_empty_ledger_exits_zero(tmp_path, monkeypatch):
     from core.config import reset_settings_cache
 
