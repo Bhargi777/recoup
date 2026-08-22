@@ -75,7 +75,7 @@ def generate_synthetic_data(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Delete any existing synthetic records first and regenerate (prevents silent duplication).",
+        help="Delete existing synthetic records first and regenerate (avoids silent duplication).",
     ),
 ) -> None:
     """Generate the Phase 3 synthetic at-risk-payment backfill (600 records, 4 cohorts).
