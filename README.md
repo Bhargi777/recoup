@@ -2,8 +2,8 @@
 
 AI-powered revenue recovery engine for Razorpay **Test Mode** (Buildathon Track 03: AI Revenue Recovery).
 
-> Status: Phase 1 (Ledger). The architecture, ground rules, and money-action invariants
-> live in [CLAUDE.md](CLAUDE.md) — read that first.
+> Status: Phase 2 (Razorpay integration). The architecture, ground rules, and money-action
+> invariants live in [CLAUDE.md](CLAUDE.md) — read that first.
 
 ## Quickstart
 
@@ -32,3 +32,26 @@ project may write to the database without emitting one of these events first.
 recoup verify-chain   # recomputes every hash and link; exits 1 with the exact
                        # broken sequence_num if anything was tampered with
 ```
+
+## Razorpay integration (Phase 2)
+
+`core/ingest` is the Test Mode HTTP client, webhook receiver, and reliability layer:
+
+- `RazorpayClient` — `create_order`, `create_payment_link`, `fetch_payment`,
+  `fetch_subscription`. Mutating calls are idempotency-gated against the ledger before
+  any HTTP request is made (`.claude/skills/razorpay-testmode/SKILL.md` §3); every call,
+  mutating or read-only, emits a ledger event.
+- Retries: 429 honors `Retry-After`; 5xx/network errors retry with full-jitter exponential
+  backoff behind a circuit breaker (CLOSED → OPEN → HALF_OPEN).
+- `POST /webhooks/razorpay` (`recoup serve`) — verifies `X-Razorpay-Signature`
+  (HMAC-SHA256 over the raw body) and dedupes on `x-razorpay-event-id`; a duplicate
+  delivery is a ledger no-op and can never re-trigger a downstream action. Covers
+  `payment.failed`, `payment_link.paid`, `subscription.charged`, `subscription.halted`.
+
+**Honest status — live proof not yet done.** Everything above is unit-tested against
+`httpx.MockTransport` (no network call made) — see `tests/test_ingest_*.py`. CLAUDE.md's
+Phase 2 exit bar additionally requires creating a real Test Mode payment link and paying
+it against `api.razorpay.com/v1` with real `rzp_test_` credentials. This environment does
+not have Razorpay test-mode credentials, so that live proof has not been run and this PR
+does not claim it has. Running it (and recording the `payment_id` as evidence per the
+razorpay-testmode skill) is tracked as follow-up work once credentials are available.

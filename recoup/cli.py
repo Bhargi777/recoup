@@ -20,6 +20,18 @@ def version() -> None:
     typer.echo(f"recoup {__version__}")
 
 
+@app.command(name="serve")
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+) -> None:
+    """Run the ingest FastAPI app (webhook receiver + health check)."""
+    import uvicorn
+
+    get_settings()  # fail fast on a bad rzp_test_ key before binding a port
+    uvicorn.run("core.ingest.webhook_app:app", host=host, port=port)
+
+
 @app.command(name="check-config")
 def check_config() -> None:
     """Load settings, enforce the rzp_test_ boot guard, print masked configuration."""
