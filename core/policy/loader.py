@@ -42,7 +42,9 @@ def load_playbooks(directory: Path | None = None) -> dict[str, Playbook]:
             raise PlaybookLoadError(f"{path}: invalid YAML syntax: {exc}") from exc
 
         if not isinstance(raw, dict):
-            raise PlaybookLoadError(f"{path}: playbook must be a YAML mapping, got {type(raw).__name__}")
+            raise PlaybookLoadError(
+                f"{path}: playbook must be a YAML mapping, got {type(raw).__name__}"
+            )
 
         try:
             playbook = Playbook.model_validate(raw)
@@ -51,7 +53,8 @@ def load_playbooks(directory: Path | None = None) -> dict[str, Playbook]:
 
         if playbook.root_cause != path.stem:
             raise PlaybookLoadError(
-                f"{path}: root_cause {playbook.root_cause!r} does not match filename stem {path.stem!r}"
+                f"{path}: root_cause {playbook.root_cause!r} does not match "
+                f"filename stem {path.stem!r}"
             )
 
         if playbook.root_cause in playbooks:
@@ -83,5 +86,7 @@ def validate_taxonomy_completeness(
         if missing:
             problems.append(f"missing playbooks for root causes: {sorted(missing)}")
         if extra:
-            problems.append(f"playbooks reference root causes outside the taxonomy: {sorted(extra)}")
+            problems.append(
+                f"playbooks reference root causes outside the taxonomy: {sorted(extra)}"
+            )
         raise PlaybookLoadError("; ".join(problems))

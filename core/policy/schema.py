@@ -83,14 +83,18 @@ class LadderStep(BaseModel):
     @classmethod
     def step_known(cls, value: str) -> str:
         if value not in KNOWN_STEPS:
-            raise ValueError(f"unknown intervention step {value!r}; must be one of {sorted(KNOWN_STEPS)}")
+            raise ValueError(
+                f"unknown intervention step {value!r}; must be one of {sorted(KNOWN_STEPS)}"
+            )
         return value
 
     @field_validator("offset")
     @classmethod
     def offset_well_formed(cls, value: str) -> str:
         if not _OFFSET_PATTERN.match(value):
-            raise ValueError(f"offset {value!r} must match 'T+<int>' or 'T+<int>h' (e.g. 'T+0', 'T+24h')")
+            raise ValueError(
+                f"offset {value!r} must match 'T+<int>' or 'T+<int>h' (e.g. 'T+0', 'T+24h')"
+            )
         return value
 
 
@@ -136,7 +140,9 @@ class Playbook(BaseModel):
 
     @model_validator(mode="after")
     def incentive_step_requires_nonzero_ceiling(self) -> Playbook:
-        has_incentive_step = any(step.step == "incentive_offer" for step in self.intervention_ladder)
+        has_incentive_step = any(
+            step.step == "incentive_offer" for step in self.intervention_ladder
+        )
         if has_incentive_step and self.incentive_ceiling.value <= 0:
             raise ValueError(
                 f"{self.root_cause}: intervention_ladder includes 'incentive_offer' "
