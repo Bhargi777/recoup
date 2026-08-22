@@ -20,7 +20,7 @@ from core.config import Settings
 from core.ledger import LedgerEvent, events_for_aggregate, list_events
 from core.policy.budget import committed_spend
 from core.policy.context import GateContext
-from core.policy.events import MONEY_ACTION_INTENT
+from core.policy.events import ACTION_EXECUTION_FAILED, MONEY_ACTION_INTENT
 from core.policy.kill_switch import is_kill_switch_active
 from core.policy.schema import Playbook
 
@@ -82,20 +82,59 @@ def _in_npci_peak_window(local_hour: int, local_minute: int) -> bool:
 # --- 1. Idempotency verification -------------------------------------------
 
 
+def _last_event_type_for_idempotency_key(
+    session: Session, aggregate_id: str, idempotency_key: str
+) -> str | None:
+    """The most recent ledger event for this aggregate whose payload carries
+    this idempotency_key, or None if it has never been seen.
+
+    Every event this key can appear in (POLICY_GATE_EVALUATED,
+    POLICY_GATE_DECISION, MONEY_ACTION_INTENT, INCENTIVE_COMMITTED, and every
+    executor event including ACTION_EXECUTION_FAILED) carries
+    ``idempotency_key`` in its payload, and events_for_aggregate returns them
+    in ascending sequence_num order, so the last matching entry is always the
+    final known outcome of the most recent attempt with this key.
+    """
+    match: str | None = None
+    for event in events_for_aggregate(session, aggregate_id):
+        payload = json.loads(event.payload_json)
+        if payload.get("idempotency_key") == idempotency_key:
+            match = event.event_type
+    return match
+
+
 def check_idempotency(
     session: Session, context: GateContext, playbook: Playbook, settings: Settings
 ) -> GateResult:
-    for _, payload in _money_action_intents(session, context.aggregate_id):
-        if payload.get("idempotency_key") == context.idempotency_key:
-            return GateResult(
-                "idempotency_verification",
-                False,
-                f"idempotency_key {context.idempotency_key!r} was already approved for "
-                f"aggregate {context.aggregate_id!r}; refusing to re-approve as an "
-                "independent action",
-            )
+    last_type = _last_event_type_for_idempotency_key(
+        session, context.aggregate_id, context.idempotency_key
+    )
+
+    if last_type is None:
+        return GateResult(
+            "idempotency_verification",
+            True,
+            "idempotency_key not previously seen for this aggregate",
+        )
+
+    if last_type == ACTION_EXECUTION_FAILED:
+        # The intent was approved and ledgered, but the real executor call
+        # failed (gateway down, circuit open, etc.) - no external action
+        # actually happened, so this is a legitimate retry, not a duplicate.
+        return GateResult(
+            "idempotency_verification",
+            True,
+            f"idempotency_key {context.idempotency_key!r} was previously approved but its "
+            "execution failed (ACTION_EXECUTION_FAILED); allowing a retry rather than "
+            "permanently blocking a record whose action never actually happened",
+        )
+
     return GateResult(
-        "idempotency_verification", True, "idempotency_key not previously seen for this aggregate"
+        "idempotency_verification",
+        False,
+        f"idempotency_key {context.idempotency_key!r} was already approved for "
+        f"aggregate {context.aggregate_id!r}; refusing to re-approve as an "
+        "independent action",
     )
 
 

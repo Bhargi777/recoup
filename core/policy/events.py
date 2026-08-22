@@ -21,6 +21,16 @@ POLICY_GATE_DECISION = "POLICY_GATE_DECISION"
 # approved here" instead of a parallel mutable table.
 MONEY_ACTION_INTENT = "MONEY_ACTION_INTENT"
 
+# Emitted by the caller (core.eval.batch_runner, core.chaos) when a real
+# executor call fails after a MONEY_ACTION_INTENT was already approved -
+# e.g. the Razorpay gateway is down and retries/circuit-breaker are
+# exhausted. This is NOT a normal DENY; the intent was legitimately
+# approved but never resolved. check_idempotency (core/policy/guardrails.py)
+# treats an idempotency_key whose most recent event is this type as
+# retryable on a subsequent run, rather than permanently blocked - this is
+# what makes "queue drains correctly on recovery" true rather than aspirational.
+ACTION_EXECUTION_FAILED = "ACTION_EXECUTION_FAILED"
+
 # Budget meter (checklist #2, #3): amount committed by one ALLOWed,
 # incentive-bearing action. Global spend = sum of payload["amount_inr"]
 # across all such events; cohort spend = the same sum filtered by

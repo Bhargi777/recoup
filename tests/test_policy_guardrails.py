@@ -9,7 +9,7 @@ from sqlmodel import Session
 from core.config import Settings
 from core.ledger import append_event, get_engine, init_ledger_schema
 from core.policy import GateContext
-from core.policy.events import INCENTIVE_COMMITTED, MONEY_ACTION_INTENT
+from core.policy.events import ACTION_EXECUTION_FAILED, INCENTIVE_COMMITTED, MONEY_ACTION_INTENT
 from core.policy.guardrails import (
     check_attempt_limits,
     check_cohort_incentive_ceiling,
@@ -83,6 +83,51 @@ def test_idempotency_denies_reused_key(session, playbooks, settings):
     ctx = make_context()
     append_event(
         session, ctx.aggregate_id, MONEY_ACTION_INTENT, {"idempotency_key": ctx.idempotency_key}
+    )
+    result = check_idempotency(session, ctx, playbooks["card_expired"], settings)
+    assert not result.allowed
+
+
+def test_idempotency_allows_retry_after_real_execution_failure(session, playbooks, settings):
+    """Phase 7 chaos gap fix: if the intent was approved but the real
+    executor call failed (ACTION_EXECUTION_FAILED is the last event for this
+    idempotency_key), the key must be retryable on a subsequent run - a
+    gateway outage must not permanently strand a record. See
+    core.policy.events.ACTION_EXECUTION_FAILED's module-level docstring."""
+    ctx = make_context()
+    append_event(
+        session, ctx.aggregate_id, MONEY_ACTION_INTENT, {"idempotency_key": ctx.idempotency_key}
+    )
+    append_event(
+        session,
+        ctx.aggregate_id,
+        ACTION_EXECUTION_FAILED,
+        {"idempotency_key": ctx.idempotency_key, "error": "gateway down"},
+    )
+    result = check_idempotency(session, ctx, playbooks["card_expired"], settings)
+    assert result.allowed
+
+
+def test_idempotency_still_denies_once_a_retry_succeeds(session, playbooks, settings):
+    """A failed-then-retried key must go back to permanently denied once a
+    later attempt actually succeeds (the last event is a real executor
+    success, not ACTION_EXECUTION_FAILED) - retries are not a loophole for
+    re-approving an already-completed action."""
+    ctx = make_context()
+    append_event(
+        session, ctx.aggregate_id, MONEY_ACTION_INTENT, {"idempotency_key": ctx.idempotency_key}
+    )
+    append_event(
+        session,
+        ctx.aggregate_id,
+        ACTION_EXECUTION_FAILED,
+        {"idempotency_key": ctx.idempotency_key, "error": "gateway down"},
+    )
+    append_event(
+        session,
+        ctx.aggregate_id,
+        "ACTION_MESSAGE_DRAFTED",
+        {"idempotency_key": ctx.idempotency_key, "action_type": "reminder_message"},
     )
     result = check_idempotency(session, ctx, playbooks["card_expired"], settings)
     assert not result.allowed
