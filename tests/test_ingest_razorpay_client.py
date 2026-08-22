@@ -156,6 +156,44 @@ def test_repeated_5xx_exhausts_retries_and_opens_circuit_breaker(session: Sessio
     assert breaker.state == CircuitState.OPEN
 
 
+def test_5xx_retries_are_individually_ledgered_in_order(session: Session) -> None:
+    """Phase 7: the ledger must show the full retry story - every retried
+    attempt, not just the eventual INTENT/SUCCEEDED bookends - so a chaos
+    scenario (or an operator) can replay exactly what happened."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "order_full_story"})
+
+    calls = {"n": 0}
+
+    def flaky_handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return httpx.Response(503, text="down")
+        return handler(request)
+
+    transport = httpx.MockTransport(flaky_handler)
+    with RazorpayClient(
+        "rzp_test_dummy", "secret", session, transport=transport, max_retries=3
+    ) as client:
+        client.create_order(1000, "INR", "invoice_full_story")
+
+    events = list_events(session)
+    types_in_order = [e.event_type for e in events]
+    retry_events = [e for e in events if e.event_type == "RAZORPAY_CREATE_ORDER_RETRYING"]
+    assert len(retry_events) == 2
+
+    intent_idx = types_in_order.index("RAZORPAY_CREATE_ORDER_INTENT")
+    succeeded_idx = types_in_order.index("RAZORPAY_CREATE_ORDER_SUCCEEDED")
+    retry_type = "RAZORPAY_CREATE_ORDER_RETRYING"
+    retry_indices = [i for i, t in enumerate(types_in_order) if t == retry_type]
+    assert all(intent_idx < i < succeeded_idx for i in retry_indices)
+
+    first_retry_payload = json.loads(retry_events[0].payload_json)
+    assert first_retry_payload["attempt"] == 0
+    assert first_retry_payload["status_code"] == 503
+
+
 def test_payload_stored_in_ledger_is_canonical_json(session: Session) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"id": "order_x"})

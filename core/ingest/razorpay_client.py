@@ -185,7 +185,7 @@ class RazorpayClient:
             {"idempotency_key": idempotency_key, "request": json_body},
         )
 
-        response = self._request_with_retries(method, path, json_body)
+        response = self._request_with_retries(method, path, json_body, action_type, entity_id)
 
         append_event(
             self._session,
@@ -198,7 +198,7 @@ class RazorpayClient:
     def _dispatch_readonly(
         self, action_type: str, entity_id: str, method: str, path: str
     ) -> dict[str, Any]:
-        response = self._request_with_retries(method, path, None)
+        response = self._request_with_retries(method, path, None, action_type, entity_id)
         append_event(
             self._session,
             entity_id,
@@ -208,8 +208,20 @@ class RazorpayClient:
         return response
 
     def _request_with_retries(
-        self, method: str, path: str, json_body: dict[str, Any] | None
+        self,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None,
+        action_type: str,
+        entity_id: str,
     ) -> dict[str, Any]:
+        """Also emits one ``RAZORPAY_{ACTION}_RETRYING`` ledger event per
+        retried attempt (before the sleep, with the attempt number, the
+        triggering status/error, and the exact wait computed) - Phase 7
+        chaos requires the ledger to show "the full retry story", not just
+        the eventual INTENT/SUCCEEDED bookends. Read on a final, unretried
+        failure (retries exhausted) nothing extra is logged here; the
+        caller's raised exception is the record of that."""
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             self._breaker.before_call()
@@ -219,7 +231,19 @@ class RazorpayClient:
                 self._breaker.record_failure()
                 last_error = exc
                 if attempt < self._max_retries:
-                    time.sleep(retry_after_or_backoff(attempt, None))
+                    sleep_seconds = retry_after_or_backoff(attempt, None)
+                    append_event(
+                        self._session,
+                        entity_id,
+                        f"RAZORPAY_{action_type.upper()}_RETRYING",
+                        {
+                            "attempt": attempt,
+                            "trigger": "transport_error",
+                            "error": str(exc),
+                            "sleep_seconds": sleep_seconds,
+                        },
+                    )
+                    time.sleep(sleep_seconds)
                     continue
                 raise
 
@@ -235,7 +259,20 @@ class RazorpayClient:
                 )
                 if attempt < self._max_retries:
                     retry_after = http_response.headers.get("Retry-After")
-                    time.sleep(retry_after_or_backoff(attempt, retry_after))
+                    sleep_seconds = retry_after_or_backoff(attempt, retry_after)
+                    append_event(
+                        self._session,
+                        entity_id,
+                        f"RAZORPAY_{action_type.upper()}_RETRYING",
+                        {
+                            "attempt": attempt,
+                            "trigger": "http_status",
+                            "status_code": http_response.status_code,
+                            "retry_after_header": retry_after,
+                            "sleep_seconds": sleep_seconds,
+                        },
+                    )
+                    time.sleep(sleep_seconds)
                     continue
                 raise last_error
 
