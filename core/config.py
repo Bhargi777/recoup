@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
+    # Secondary LLM classifier path (core/diagnose/llm_classifier.py). Unlike the
+    # Razorpay key, an empty value is a normal, non-fatal state: it just means the
+    # LLM fallback path is unavailable and diagnose() must abstain honestly instead
+    # of crashing the app or fabricating a classification.
+    anthropic_api_key: str = ""
+
     database_url: str = "sqlite:///recoup.db"
 
     app_env: str = "development"

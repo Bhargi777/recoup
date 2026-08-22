@@ -5,6 +5,7 @@ from sqlmodel import Session
 
 from core import __version__
 from core.config import get_settings
+from core.eval.diagnosis_eval import evaluate_holdout
 from core.ingest.synthetic import init_synthetic_schema, run_generation
 from core.ledger import get_engine, init_ledger_schema, verify_chain
 
@@ -116,6 +117,42 @@ def generate_synthetic_data(
     for cohort, count in sorted(result.cohort_counts.items()):
         typer.echo(f"  {cohort:<28}: {count}")
     typer.echo(f"  {'held_out':<28}: {result.held_out_count}")
+
+
+@app.command(name="eval-diagnosis")
+def eval_diagnosis() -> None:
+    """Run the Phase 4 diagnosis pipeline against the 200 held-out synthetic
+    records and print real, measured macro P/R/F1, confusion matrix,
+    abstain rate, and coverage. Self-contained: generates the synthetic
+    dataset first if the database is empty (never doubles it if already
+    present, same guard as `generate-synthetic-data`).
+    """
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    init_ledger_schema(engine)
+    init_synthetic_schema(engine)
+
+    with Session(engine) as session:
+        run_generation(session, seed=settings.split_seed, force=False)
+        report = evaluate_holdout(session)
+
+    typer.secho(f"held-out records evaluated: {report.total}", fg=typer.colors.CYAN)
+    typer.echo(f"  macro precision : {report.macro_precision:.4f}")
+    typer.echo(f"  macro recall    : {report.macro_recall:.4f}")
+    typer.echo(f"  macro f1        : {report.macro_f1:.4f}")
+    typer.echo(f"  abstain rate    : {report.abstain_rate:.4f}")
+    typer.echo("  coverage:")
+    for method, count in sorted(report.coverage.items()):
+        typer.echo(f"    {method:<14}: {count}")
+    typer.echo("  per-class (precision / recall / f1 / support):")
+    for label, stats in sorted(report.per_class.items()):
+        typer.echo(
+            f"    {label:<26}: {stats['precision']:.3f} / {stats['recall']:.3f} / "
+            f"{stats['f1']:.3f} / {int(stats['support'])}"
+        )
+    typer.echo("  confusion matrix (true -> {predicted: count}):")
+    for true_label, preds in sorted(report.confusion_matrix.items()):
+        typer.echo(f"    {true_label}: {dict(sorted(preds.items()))}")
 
 
 if __name__ == "__main__":
