@@ -146,6 +146,30 @@ def test_rejects_unknown_mode(session, settings):
         run_batch(session, mode="not_a_real_mode", settings=settings)
 
 
+def test_blocked_records_are_tracked_separately_from_the_comparison(session, settings):
+    """With the kill switch active, every treatment-arm record must be
+    blocked at the gate rather than executed - and blocked records must be
+    excluded from the treatment/control uplift comparison entirely (not
+    counted as "not recovered"), per honest-metrics SKILL.md SS5."""
+    from core.policy.kill_switch import activate_kill_switch
+
+    _seed_small(session, 80)
+    activate_kill_switch(session, "test: force every treatment action to be blocked")
+
+    report = run_batch(session, mode="dry_run", settings=settings)
+
+    assert report.blocked_count > 0
+    assert report.blocked_reasons.get("kill_switch", 0) == report.blocked_count
+    assert report.treatment_count == 0  # every would-be-treatment record was blocked, not counted
+    assert report.executed_action_counts == {}
+
+    # No executor ledger event exists for any record - the kill switch blocked
+    # every treatment-arm gate evaluation before an executor was ever called.
+    types = {e.event_type for e in list_events(session)}
+    assert "ACTION_MESSAGE_DRAFTED" not in types
+    assert "EXCEPTION_QUEUE_ENQUEUED" not in types
+
+
 def test_full_batch_of_600_synthetic_records_dry_run(settings):
     """A real, timed run against the actual 600 Phase-3 synthetic records -
     not a subset, not an estimate. The counts and elapsed_seconds this
