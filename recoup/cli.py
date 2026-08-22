@@ -1,9 +1,11 @@
 """Typer CLI entrypoint for recoup."""
 
 import typer
+from sqlmodel import Session
 
 from core import __version__
 from core.config import get_settings
+from core.ledger import get_engine, init_ledger_schema, verify_chain
 
 app = typer.Typer(
     name="recoup",
@@ -37,14 +39,34 @@ def check_config() -> None:
 
 
 @app.command(name="verify-chain")
-def verify_chain() -> None:
-    """Verify the hash-chained audit ledger end to end."""
-    # Implemented in Phase 1 (feat/01-domain-ledger).
+def verify_chain_command() -> None:
+    """Verify the hash-chained audit ledger end to end, reporting any tamper location."""
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    init_ledger_schema(engine)
+
+    with Session(engine) as session:
+        result = verify_chain(session)
+
+    if result.events_checked == 0:
+        typer.echo("ledger is empty: 0 events, nothing to verify")
+        raise typer.Exit(code=0)
+
+    if result.ok:
+        typer.secho(
+            f"chain OK: {result.events_checked} events verified, no tampering detected",
+            fg=typer.colors.GREEN,
+        )
+        raise typer.Exit(code=0)
+
     typer.secho(
-        "verify-chain: not implemented yet; the ledger ships in Phase 1.",
-        fg=typer.colors.YELLOW,
+        f"chain BROKEN at sequence {result.first_bad_sequence} "
+        f"({result.events_checked} events checked)",
+        fg=typer.colors.RED,
     )
-    raise typer.Exit(code=2)
+    for err in result.errors:
+        typer.echo(f"  {err}")
+    raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
