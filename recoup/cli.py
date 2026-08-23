@@ -4,6 +4,7 @@ import typer
 from sqlmodel import Session
 
 from core import __version__
+from core.chaos.scenarios import INJECTION_TYPES
 from core.config import get_settings
 from core.eval.batch_runner import run_batch
 from core.eval.diagnosis_eval import evaluate_holdout
@@ -274,6 +275,48 @@ def run_batch_command(
         f"(95% Wilson CI {u.control.lower:.4f}-{u.control.upper:.4f}, n={u.control.n})"
     )
     typer.echo(f"  [SIMULATED] uplift (treatment - control): {u.uplift:+.4f}")
+
+
+@app.command(name="chaos")
+def chaos_command(
+    inject: str = typer.Option(
+        ...,
+        "--inject",
+        help=f"One of: {', '.join(sorted(INJECTION_TYPES))}",
+    ),
+) -> None:
+    """Run one Phase 7 chaos scenario against a real pipeline run and print
+    a real pass/fail report - every check is a literal mock-call-count or
+    ledger-event-count assertion, not a vague "it didn't crash".
+
+    Each injection type is documented in core.chaos.scenarios; see that
+    module's docstring for exactly what is real (the diagnose/holdout/gate
+    pipeline, the RazorpayClient retry/circuit-breaker path) versus injected
+    (the HTTP failure itself, via httpx.MockTransport - never real network).
+
+    Runs against a fresh, throwaway in-memory ledger every time (not the
+    persistent --database-url ledger) - a chaos demo run must be
+    reproducible and must never corrupt or pollute the real audit trail
+    with synthetic chaos records.
+    """
+    if inject not in INJECTION_TYPES:
+        typer.secho(
+            f"unknown --inject {inject!r}; must be one of {sorted(INJECTION_TYPES)}",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    settings = get_settings()
+    engine = get_engine("sqlite:///:memory:")
+    init_ledger_schema(engine)
+    init_synthetic_schema(engine)
+
+    with Session(engine) as session:
+        report = INJECTION_TYPES[inject](session, settings=settings)
+
+    typer.secho(report.as_text(), fg=typer.colors.GREEN if report.ok else typer.colors.RED)
+    if not report.ok:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

@@ -50,11 +50,12 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx
 from sqlmodel import Session, select
 
 from core.act.executors import (
@@ -71,14 +72,24 @@ from core.diagnose.diagnose import diagnose
 from core.experiment.holdout import CONTROL, TREATMENT, assign_group
 from core.experiment.simulated_outcome import simulated_outcome
 from core.experiment.uplift import UpliftReport, compute_uplift
+from core.ingest.circuit_breaker import CircuitOpenError
 from core.ingest.idempotency import compute_idempotency_key
-from core.ingest.razorpay_client import RazorpayClient
+from core.ingest.razorpay_client import RazorpayAPIError, RazorpayClient
 from core.ingest.synthetic import AtRiskRecord
 from core.ledger import append_event
 from core.policy.context import GateContext
+from core.policy.events import ACTION_EXECUTION_FAILED
 from core.policy.gate import PolicyDecision, evaluate_gate
 from core.policy.loader import load_playbooks
 from core.policy.schema import LadderStep, Playbook
+
+# Real-world failures a live executor call can raise once the policy gate has
+# already ALLOWed it (gateway down, retries+circuit breaker exhausted, or a
+# raw network failure escaping the client). These are the ONLY exceptions
+# run_batch catches per-record - anything else (a programming error) still
+# propagates and stops the run, which is correct; only genuine external
+# failures get the "log it, keep draining the rest of the queue" treatment.
+EXECUTOR_TRANSIENT_FAILURES = (RazorpayAPIError, CircuitOpenError, httpx.TransportError)
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -104,6 +115,13 @@ class BatchReport:
     executed_action_counts: dict[str, int]
     uplift: UpliftReport
     elapsed_seconds: float
+    # Phase 7: records whose gate ALLOWed the action but whose real executor
+    # call then failed (gateway 5xx/429 exhausted, circuit open, network
+    # error) - logged as ACTION_EXECUTION_FAILED and retryable on a later
+    # run (core.policy.guardrails.check_idempotency), never silently dropped
+    # and never allowed to abort the rest of the batch.
+    failed_execution_count: int = 0
+    failed_execution_reasons: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -116,6 +134,8 @@ class BatchReport:
             "blocked_count": self.blocked_count,
             "blocked_reasons": self.blocked_reasons,
             "executed_action_counts": self.executed_action_counts,
+            "failed_execution_count": self.failed_execution_count,
+            "failed_execution_reasons": self.failed_execution_reasons,
             "uplift": self.uplift.as_dict(),
             "elapsed_seconds": self.elapsed_seconds,
         }
@@ -207,6 +227,8 @@ def run_batch(
     blocked_records = 0
     blocked_reasons: Counter[str] = Counter()
     executed_action_counts: Counter[str] = Counter()
+    failed_execution_count = 0
+    failed_execution_reasons: Counter[str] = Counter()
 
     for record in records:
         diagnosis = diagnose(session, record)
@@ -293,9 +315,38 @@ def run_batch(
                     blocked_reasons[result.check_name] += 1
             continue
 
-        action_result = _run_executor(
-            session, step, decision, context, record, mode=mode, razorpay_client=razorpay_client
-        )
+        try:
+            action_result = _run_executor(
+                session,
+                step,
+                decision,
+                context,
+                record,
+                mode=mode,
+                razorpay_client=razorpay_client,
+            )
+        except EXECUTOR_TRANSIENT_FAILURES as exc:
+            # The gate already ALLOWed and ledgered MONEY_ACTION_INTENT
+            # (checklist #10), but the real external call failed. Record
+            # that honestly and move on to the next record - one gateway
+            # outage must not abort the rest of the queue. The idempotency
+            # key stays retryable on a later run (see
+            # core.policy.guardrails.check_idempotency).
+            failed_execution_count += 1
+            failed_execution_reasons[step.step] += 1
+            append_event(
+                session,
+                record.id,
+                ACTION_EXECUTION_FAILED,
+                {
+                    "idempotency_key": idempotency_key,
+                    "action_type": step.step,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            continue
+
         executed_action_counts[step.step] += 1
         if action_result.status == "refused":  # pragma: no cover - decision.allowed already True
             continue
@@ -333,6 +384,8 @@ def run_batch(
         blocked_count=blocked_records,
         blocked_reasons=dict(blocked_reasons),
         executed_action_counts=dict(executed_action_counts),
+        failed_execution_count=failed_execution_count,
+        failed_execution_reasons=dict(failed_execution_reasons),
         uplift=compute_uplift(
             treatment_recovered, treatment_total, control_recovered, control_total
         ),
