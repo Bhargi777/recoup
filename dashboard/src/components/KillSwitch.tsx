@@ -57,18 +57,18 @@ export function KillSwitch() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition ${
+        className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
           active
             ? 'border-rose-500 bg-rose-500/20 text-rose-300 hover:bg-rose-500/30'
-            : 'border-rose-500/40 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
+            : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-400'
         }`}
         title="Real control — calls core.policy.activate_kill_switch / deactivate_kill_switch"
       >
         <span
-          className={`inline-block h-1.5 w-1.5 rounded-full ${active ? 'bg-rose-400 animate-pulse' : 'bg-rose-500'}`}
+          className={`inline-block h-1.5 w-1.5 rounded-full ${active ? 'bg-rose-400 animate-pulse' : 'bg-slate-600'}`}
         />
         Kill switch
-        <span className="text-[10px] font-normal text-rose-500/70">{label}</span>
+        <span className={`text-[10px] font-normal ${active ? 'text-rose-400/80' : 'text-slate-600'}`}>{label}</span>
       </button>
 
       {open && (
@@ -79,7 +79,7 @@ export function KillSwitch() {
           onClick={() => setOpen(false)}
         >
           <div
-            className="w-full max-w-sm rounded-md border border-slate-800 bg-slate-900 p-4 shadow-xl"
+            className="w-full max-w-sm rounded-xl border border-white/10 bg-[#10141f] p-5 shadow-2xl shadow-black/50"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-sm font-semibold text-slate-100">
@@ -97,7 +97,7 @@ export function KillSwitch() {
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/5"
               >
                 Cancel
               </button>
@@ -105,7 +105,7 @@ export function KillSwitch() {
                 type="button"
                 onClick={toggle}
                 disabled={busy}
-                className="rounded border border-rose-500/60 bg-rose-500/20 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/30 disabled:opacity-50"
+                className="rounded-lg border border-rose-500/60 bg-rose-500/20 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/30 disabled:opacity-50"
               >
                 {busy ? 'Working…' : active ? 'Deactivate' : 'Activate'}
               </button>
