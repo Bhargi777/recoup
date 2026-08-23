@@ -2,45 +2,45 @@
 
 React + Vite + TypeScript + Tailwind CSS operator console for `recoup`.
 
-## Status: Phase 8 SCAFFOLD
+## Status: Phase 8 — wired to the real API
 
-This is project setup and static layout only. **No backend is wired.** There
-is no API server for this dashboard to call yet — `core/policy`, `core/act`,
-`core/diagnose`, `core/experiment`, and `core/eval` do not exist as of this
-branch, and there is no HTTP layer exposing `core/ledger` either.
+Every page now fetches from `core/api` (mounted on `core/ingest/webhook_app.py`) instead
+of showing placeholder state:
 
-Every number and list on screen is either:
+- `/pipeline` — real `AtRiskRecord` rows grouped by the four real cohort ids
+  (`one_time_checkout_failure`, `checkout_abandonment`, `subscription_mandate_failure`,
+  `overdue_b2b_invoice`), from `/api/pipeline`.
+- `/decisions` — real `POLICY_GATE_DECISION` ledger events with a plain-English "why"
+  derived deterministically from the gate's own reason string, from `/api/decisions`.
+- `/ledger` — paginated real `LedgerEvent` rows plus a working "Verify chain" button
+  calling the real `core.ledger.verify_chain`, from `/api/ledger` and `/api/ledger/verify`.
+- `/guardrails` — real blocked-check rows, distinguishing a correctly-blocked action from
+  a guardrail violation, from `/api/guardrails`.
+- `/metrics` — real diagnosis P/R/F1 and real, `[SIMULATED]`-labeled uplift + Wilson CI
+  (the label renders directly on the UI, not just in a tooltip), from `/api/metrics`.
+  This endpoint runs the real pipeline live and can take up to a minute.
 
-- an explicit **`placeholder`** badge plus an obviously-fake value (`—`), or
-- an empty state that says **"not wired yet"**.
+The kill switch in the top bar calls the real `GET`/`POST /api/kill-switch`, which itself
+only calls `core.policy.activate_kill_switch` / `deactivate_kill_switch` — real,
+ledger-replayed state.
 
-Nothing here is a real metric. Do not read anything on these pages as live
-data. Real API integration is future work (a later phase).
+Nothing on these five pages is scaffold-only placeholder content as of this phase. See
+the root [README.md](../README.md)'s "Dashboard" section and `REPORT.md` for the real,
+freshly-run numbers behind these views.
 
 ## Run it
 
 ```bash
+# terminal 1 — the API
+recoup serve --port 8000
+
+# terminal 2 — the dashboard
+cp .env.example .env.local   # VITE_API_BASE_URL, defaults to http://127.0.0.1:8000
 npm install
 npm run dev
 ```
 
-Then open the printed local URL. Five routes are available from the sidebar:
-
-- `/pipeline` — at-risk pipeline grouped by the four cohorts (checkout
-  failures, abandonment, subscription/mandate failures, overdue invoices)
-- `/decisions` — live decision feed shape (diagnosis, action, policy gate
-  result, plain-English "why")
-- `/ledger` — ledger explorer; columns match `core/ledger/models.py`'s
-  `LedgerEvent` exactly (`sequence_num`, `event_id`, `timestamp_utc`,
-  `aggregate_id`, `event_type`, `previous_hash`, `current_hash`)
-- `/guardrails` — guardrail-block panel (budget cap, quiet hours, attempt
-  cap, RBI/NPCI mandate rules, kill switch)
-- `/metrics` — uplift + CI, cost per rupee recovered, exception list
-
-The top bar also has a **kill switch** control. It is a deliberately inert
-demo stub — clicking it opens a dialog explaining that it isn't connected to
-anything real yet. Do not wire it to a real endpoint without also wiring the
-guardrail/audit-ledger invariants described in `CLAUDE.md`.
+Then open the printed local URL. Five routes are available from the sidebar (see above).
 
 ## Build / lint
 
@@ -58,3 +58,5 @@ npm run lint    # oxlint
   nav + top bar) so all pages share one visual system.
 - Dense, small-type-scale layout deliberately, since this is an operator
   console, not a marketing page.
+- `src/lib/api.ts` is the one fetch wrapper every page uses; API base URL comes from
+  `VITE_API_BASE_URL` (see `.env.example`), not a hardcoded `localhost`.
