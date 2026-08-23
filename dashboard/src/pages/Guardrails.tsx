@@ -67,11 +67,11 @@ export function Guardrails() {
               No blocks recorded yet — run <code className="font-mono">recoup run-batch</code>.
             </p>
           ) : (
-            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {Object.entries(data.reasons_by_check).map(([check, count]) => (
-                <li key={check} className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                <li key={check} className="rounded-lg border border-white/[0.06] bg-black/20 p-3">
                   <p className="font-mono text-[11px] text-sky-400">{check}</p>
-                  <p className="text-xs font-medium text-slate-200">{count} blocked</p>
+                  <p className="mt-1 text-sm font-medium text-slate-200">{count} blocked</p>
                 </li>
               ))}
             </ul>
@@ -80,30 +80,30 @@ export function Guardrails() {
       )}
 
       <Panel title="Blocked actions (most recent first)">
-        <div className="max-h-96 overflow-y-auto">
+        <div className="max-h-96 overflow-y-auto rounded-lg border border-white/[0.05]">
           <table className="w-full border-collapse text-left text-xs">
-            <thead>
+            <thead className="sticky top-0 bg-[#0d1119]">
               <tr className="text-slate-500">
-                <th className="border-b border-slate-800 pb-1.5 pr-3 font-medium">Aggregate</th>
-                <th className="border-b border-slate-800 pb-1.5 pr-3 font-medium">Check</th>
-                <th className="border-b border-slate-800 pb-1.5 pr-3 font-medium">Root cause</th>
-                <th className="border-b border-slate-800 pb-1.5 font-medium">Reason</th>
+                <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Aggregate</th>
+                <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Check</th>
+                <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Root cause</th>
+                <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Reason</th>
               </tr>
             </thead>
             <tbody>
               {!data && !error && (
                 <tr>
-                  <td colSpan={4} className="pt-3 pb-1 text-slate-600">
+                  <td colSpan={4} className="px-3 py-4 text-slate-600">
                     Loading real guardrail-block data...
                   </td>
                 </tr>
               )}
               {data?.blocks.map((b) => (
-                <tr key={`${b.sequence_num}`} className="border-b border-slate-900">
-                  <td className="py-1 pr-3 font-mono text-slate-300">{b.aggregate_id}</td>
-                  <td className="py-1 pr-3 font-mono text-amber-400">{b.check_name}</td>
-                  <td className="py-1 pr-3 text-slate-300">{b.root_cause ?? '—'}</td>
-                  <td className="py-1 text-slate-400">{b.reason}</td>
+                <tr key={`${b.sequence_num}`} className="border-b border-white/[0.04] transition-colors last:border-0 hover:bg-white/[0.025]">
+                  <td className="px-3 py-2 font-mono text-slate-300">{b.aggregate_id}</td>
+                  <td className="px-3 py-2 font-mono text-amber-400">{b.check_name}</td>
+                  <td className="px-3 py-2 text-slate-300">{b.root_cause ?? '—'}</td>
+                  <td className="px-3 py-2 text-slate-400">{b.reason}</td>
                 </tr>
               ))}
             </tbody>
