@@ -92,7 +92,7 @@ export function Ledger() {
             type="button"
             onClick={runVerify}
             disabled={verifying}
-            className="rounded border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-medium text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+            className="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
           >
             {verifying ? 'Verifying…' : 'Verify chain'}
           </button>
@@ -125,12 +125,12 @@ export function Ledger() {
       )}
 
       <Panel>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto rounded-lg border border-white/[0.05]">
           <table className="w-full min-w-[900px] border-collapse text-left text-xs">
-            <thead>
+            <thead className="sticky top-0 bg-[#0d1119]">
               <tr className="text-slate-500">
                 {LEDGER_COLUMNS.map((col) => (
-                  <th key={col} className="border-b border-slate-800 pb-1.5 pr-4 font-mono font-medium">
+                  <th key={col} className="border-b border-white/[0.06] px-3 py-2 font-mono font-medium">
                     {col}
                   </th>
                 ))}
@@ -139,29 +139,29 @@ export function Ledger() {
             <tbody>
               {!data && !error && (
                 <tr>
-                  <td colSpan={LEDGER_COLUMNS.length} className="pt-3 pb-1 text-slate-600">
+                  <td colSpan={LEDGER_COLUMNS.length} className="px-3 py-4 text-slate-600">
                     Loading real ledger events...
                   </td>
                 </tr>
               )}
               {data && data.events.length === 0 && (
                 <tr>
-                  <td colSpan={LEDGER_COLUMNS.length} className="pt-3 pb-1 text-slate-600">
+                  <td colSpan={LEDGER_COLUMNS.length} className="px-3 py-4 text-slate-600">
                     No events yet — every command in the README's demo script writes ledger events.
                   </td>
                 </tr>
               )}
               {data?.events.map((e) => (
-                <tr key={e.event_id} className="border-b border-slate-900">
-                  <td className="py-1 pr-4 font-mono text-slate-400">{e.sequence_num}</td>
-                  <td className="py-1 pr-4 font-mono text-slate-500">{e.event_id}</td>
-                  <td className="py-1 pr-4 font-mono text-slate-500">{e.timestamp_utc}</td>
-                  <td className="py-1 pr-4 font-mono text-slate-300">{e.aggregate_id}</td>
-                  <td className="py-1 pr-4 font-mono text-sky-300">{e.event_type}</td>
-                  <td className="py-1 pr-4 font-mono text-slate-600" title={e.previous_hash}>
+                <tr key={e.event_id} className="border-b border-white/[0.04] transition-colors last:border-0 hover:bg-white/[0.025]">
+                  <td className="px-3 py-2 font-mono text-slate-400">{e.sequence_num}</td>
+                  <td className="px-3 py-2 font-mono text-slate-500">{e.event_id}</td>
+                  <td className="px-3 py-2 font-mono text-slate-500">{e.timestamp_utc}</td>
+                  <td className="px-3 py-2 font-mono text-slate-300">{e.aggregate_id}</td>
+                  <td className="px-3 py-2 font-mono text-sky-300">{e.event_type}</td>
+                  <td className="px-3 py-2 font-mono text-slate-600" title={e.previous_hash}>
                     {shortHash(e.previous_hash)}
                   </td>
-                  <td className="py-1 font-mono text-slate-600" title={e.current_hash}>
+                  <td className="px-3 py-2 font-mono text-slate-600" title={e.current_hash}>
                     {shortHash(e.current_hash)}
                   </td>
                 </tr>
@@ -171,7 +171,7 @@ export function Ledger() {
         </div>
 
         {data && data.total > 0 && (
-          <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+          <div className="mt-4 flex items-center justify-between text-[11px] text-slate-500">
             <span>
               Showing {offset + 1}-{Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
             </span>
@@ -180,7 +180,7 @@ export function Ledger() {
                 type="button"
                 disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-                className="rounded border border-slate-700 px-2 py-1 disabled:opacity-40"
+                className="rounded-lg border border-white/10 px-2.5 py-1 transition-colors hover:bg-white/5 disabled:opacity-40"
               >
                 Prev
               </button>
@@ -188,7 +188,7 @@ export function Ledger() {
                 type="button"
                 disabled={offset + PAGE_SIZE >= data.total}
                 onClick={() => setOffset(offset + PAGE_SIZE)}
-                className="rounded border border-slate-700 px-2 py-1 disabled:opacity-40"
+                className="rounded-lg border border-white/10 px-2.5 py-1 transition-colors hover:bg-white/5 disabled:opacity-40"
               >
                 Next
               </button>
