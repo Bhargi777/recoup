@@ -2,7 +2,7 @@
 
 AI-powered revenue recovery engine for Razorpay **Test Mode** (Buildathon Track 03: AI Revenue Recovery).
 
-> Status: Phase 6 (Execution + Experiment). The architecture, ground rules, and money-action
+> Status: Phase 7 (Chaos + Graceful Failure). The architecture, ground rules, and money-action
 > invariants live in [CLAUDE.md](CLAUDE.md) — read that first.
 
 ## Quickstart
@@ -414,3 +414,60 @@ cooldown_hours = 6.0` is adopted directly from
 `.claude/skills/money-action-gate/SKILL.md`'s own worked example (item 5 of the
 checklist table) as a reasonable, fully configurable default — not presented as a
 regulatory requirement anywhere in code or docs.
+
+## Chaos + graceful failure (Phase 7)
+
+`core/chaos/scenarios.py` proves — with real code execution against the real pipeline,
+not assumptions — that the resilience mechanics built in earlier phases actually hold
+under injected failure. Each scenario first runs a small (15-record) real
+diagnose → holdout → gate batch through `core.eval.batch_runner.run_batch` in
+`--dry-run`, then injects one failure mode against a real `RazorpayClient` (via
+`httpx.MockTransport`, the same pattern Phase 2's own tests use — nothing here ever
+touches the network) or the real webhook handler:
+
+```bash
+recoup chaos --inject gateway_5xx        # 2 injected 502s, then a real retry succeeds
+recoup chaos --inject rate_limit         # a 429 with Retry-After, honored verbatim
+recoup chaos --inject webhook_replay     # the same webhook delivered twice
+recoup chaos --inject duplicate_callback # the same record run through gate+executor twice
+```
+
+Each prints a `[PASS]`/`[FAIL]` line per check with a literal mock-call-count or
+ledger-event-count backing it — e.g. `gateway_5xx` asserts the mocked transport received
+*exactly* 3 requests (2 injected failures + 1 success) and exactly one
+`ACTION_PAYMENT_LINK_EXECUTED_LIVE` event, not "it didn't crash." Every scenario ends by
+calling `core.ledger.verify_chain` and asserting `ok=True` — chaos injection stresses
+external calls, never the ledger's own integrity. A matching pytest exists per scenario
+in `tests/test_chaos_scenarios.py`, checking the identical assertions the CLI prints.
+
+**`duplicate_callback` is the literal proof the spec asks for by name**: a duplicate
+webhook, retried job, or re-run-after-crash cannot produce a second payment link. It runs
+one record through the real `evaluate_gate` → `execute_payment_link` cycle twice with the
+same idempotency key and checks the mocked Razorpay transport's actual request count —
+exactly 1 across both runs, with the second `evaluate_gate` call itself blocked by
+`check_idempotency` rather than silently re-approved.
+
+**Two real gaps were found and fixed while building this, not papered over with a test
+that dodges them:**
+- `check_idempotency` previously blocked an idempotency_key permanently once
+  `MONEY_ACTION_INTENT` was recorded, even if the real executor call that followed never
+  actually happened (gateway down, retries/circuit-breaker exhausted) — stranding that
+  record forever. It now treats a key whose most recent event is the new
+  `ACTION_EXECUTION_FAILED` as retryable, while a key that reached a real terminal action
+  stays permanently blocked.
+- `run_batch` previously let a live executor's `RazorpayAPIError`/`CircuitOpenError`/
+  `httpx.TransportError` propagate and abort the entire batch, silently never processing
+  any record after the failing one. It now catches exactly those transient failures per
+  record, logs `ACTION_EXECUTION_FAILED`, and keeps draining the queue — this is what
+  makes "queue drains correctly on recovery" true rather than aspirational; see
+  `tests/test_eval_batch_runner_recovery.py` for the end-to-end proof (one record fails,
+  the rest of that batch still completes, a second run picks up exactly the failed
+  record and completes it, and no record that already succeeded is reprocessed).
+
+**Honest scope note on `webhook_replay`**: `core.ingest.webhooks.handle_webhook_event`
+only ever appends ledger events in this codebase — it never calls an executor or
+`RazorpayClient` (verified by reading the module, not assumed). Webhooks are purely
+observational here; `run_batch` is the only code path that reaches an executor. So
+`webhook_replay` proves "a duplicate delivery never double-writes the domain ledger
+event," and the stronger "cannot produce a second real action" guarantee is proven at the
+run-batch/executor layer instead, by `duplicate_callback`.
