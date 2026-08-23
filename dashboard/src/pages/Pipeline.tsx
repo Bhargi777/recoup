@@ -77,40 +77,40 @@ export function Pipeline() {
           const rows = byCohort.get(cohort.id)?.records ?? []
           return (
             <Panel key={cohort.id} title={`${cohort.label} (${rows.length})`}>
-              <p className="mb-2 text-xs text-slate-500">{cohort.description}</p>
-              <div className="max-h-72 overflow-y-auto">
+              <p className="mb-3 text-xs text-slate-500">{cohort.description}</p>
+              <div className="max-h-72 overflow-y-auto rounded-lg border border-white/[0.05]">
                 <table className="w-full border-collapse text-left text-xs">
-                  <thead>
+                  <thead className="sticky top-0 bg-[#0d1119]">
                     <tr className="text-slate-500">
-                      <th className="border-b border-slate-800 pb-1.5 pr-2 font-medium">Customer</th>
-                      <th className="border-b border-slate-800 pb-1.5 pr-2 font-medium">Root cause</th>
-                      <th className="border-b border-slate-800 pb-1.5 pr-2 font-medium">Amount</th>
-                      <th className="border-b border-slate-800 pb-1.5 font-medium">Held out</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Customer</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Root cause</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 text-right font-medium">Amount</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Held out</th>
                     </tr>
                   </thead>
                   <tbody>
                     {!data && !error && (
                       <tr>
-                        <td colSpan={4} className="pt-3 pb-1 text-slate-600">
+                        <td colSpan={4} className="px-3 py-4 text-slate-600">
                           Loading real pipeline data...
                         </td>
                       </tr>
                     )}
                     {data && rows.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="pt-3 pb-1 text-slate-600">
+                        <td colSpan={4} className="px-3 py-4 text-slate-600">
                           No rows yet — run <code className="font-mono">recoup generate-synthetic-data</code>.
                         </td>
                       </tr>
                     )}
                     {rows.map((r) => (
-                      <tr key={r.id} className="border-b border-slate-900">
-                        <td className="py-1 pr-2 font-mono text-slate-300">{r.customer_id}</td>
-                        <td className="py-1 pr-2 text-slate-300">
+                      <tr key={r.id} className="border-b border-white/[0.04] transition-colors last:border-0 hover:bg-white/[0.025]">
+                        <td className="px-3 py-2 font-mono text-slate-300">{r.customer_id}</td>
+                        <td className="px-3 py-2 text-slate-300">
                           {r.root_cause ?? <span className="text-slate-600">not diagnosed</span>}
                         </td>
-                        <td className="py-1 pr-2 font-mono text-slate-300">{inr.format(r.amount_inr)}</td>
-                        <td className="py-1 text-slate-400">{r.held_out ? 'yes' : 'no'}</td>
+                        <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">{inr.format(r.amount_inr)}</td>
+                        <td className="px-3 py-2 text-slate-400">{r.held_out ? 'yes' : 'no'}</td>
                       </tr>
                     ))}
                   </tbody>
