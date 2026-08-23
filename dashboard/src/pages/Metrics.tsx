@@ -53,10 +53,10 @@ interface MetricsResponse {
 
 function MetricStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded border border-slate-800 bg-slate-950/40 p-3">
-      <p className="text-[10px] uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 font-mono text-xl text-slate-100">{value}</p>
-      {sub && <p className="mt-0.5 text-[10px] text-slate-500">{sub}</p>}
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+      <p className="text-[11px] uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1.5 font-mono text-2xl font-medium tabular-nums text-slate-100">{value}</p>
+      {sub && <p className="mt-1 text-[11px] text-slate-500">{sub}</p>}
     </div>
   )
 }
@@ -110,7 +110,7 @@ export function Metrics() {
 
       {data && (
         <>
-          <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <MetricStat label="Diagnosis macro F1" value={data.diagnosis.macro_f1.toFixed(3)} sub={`n=${data.diagnosis.total} held-out`} />
             <MetricStat label="Abstain rate" value={pct(data.diagnosis.abstain_rate)} sub="routed to human queue" />
             <MetricStat
@@ -121,44 +121,44 @@ export function Metrics() {
             <MetricStat label="Open exceptions" value={String(data.exceptions.total)} sub="ABSTAIN + escalated" />
           </div>
 
-          <Panel title="[SIMULATED] Recovery uplift vs. control" className="mb-3">
-            <p className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300">
+          <Panel title="[SIMULATED] Recovery uplift vs. control" className="mb-4">
+            <p className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
               [SIMULATED] {data.uplift.qualifier}
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
+              <div className="rounded-lg border border-white/[0.05] bg-black/20 p-3">
                 <p className="text-[10px] uppercase tracking-wide text-slate-500">Treatment recovery rate</p>
-                <p className="font-mono text-slate-200">
+                <p className="mt-1 font-mono text-slate-200">
                   {pct(data.uplift.treatment.point_estimate)} (95% CI {pct(data.uplift.treatment.lower)}-
                   {pct(data.uplift.treatment.upper)}, n={data.uplift.treatment.n})
                 </p>
               </div>
-              <div>
+              <div className="rounded-lg border border-white/[0.05] bg-black/20 p-3">
                 <p className="text-[10px] uppercase tracking-wide text-slate-500">Control recovery rate</p>
-                <p className="font-mono text-slate-200">
+                <p className="mt-1 font-mono text-slate-200">
                   {pct(data.uplift.control.point_estimate)} (95% CI {pct(data.uplift.control.lower)}-
                   {pct(data.uplift.control.upper)}, n={data.uplift.control.n})
                 </p>
               </div>
-              <div>
+              <div className="rounded-lg border border-white/[0.05] bg-black/20 p-3">
                 <p className="text-[10px] uppercase tracking-wide text-slate-500">Batch run</p>
-                <p className="font-mono text-slate-200">
+                <p className="mt-1 font-mono text-slate-200">
                   {data.batch_run.total_records} records, {data.batch_run.mode}, {data.batch_run.elapsed_seconds.toFixed(1)}s
                 </p>
               </div>
             </div>
           </Panel>
 
-          <Panel title="Guardrail: correctly blocked actions (not violations)" className="mb-3">
+          <Panel title="Guardrail: correctly blocked actions (not violations)" className="mb-4">
             {Object.keys(data.batch_run.blocked_reasons).length === 0 ? (
               <p className="text-xs text-slate-500">
                 {data.batch_run.blocked_count} blocked this run — see the Guardrails page for the running total
                 across all recorded decisions.
               </p>
             ) : (
-              <ul className="text-xs text-slate-300">
+              <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {Object.entries(data.batch_run.blocked_reasons).map(([reason, count]) => (
-                  <li key={reason}>
+                  <li key={reason} className="rounded-lg border border-white/[0.05] bg-black/20 px-3 py-2 text-xs text-slate-300">
                     <span className="font-mono text-amber-400">{reason}</span>: {count}
                   </li>
                 ))}
@@ -172,21 +172,21 @@ export function Metrics() {
                 No exceptions in this run — the deterministic mapper resolved every record.
               </p>
             ) : (
-              <div className="max-h-64 overflow-y-auto">
+              <div className="max-h-64 overflow-y-auto rounded-lg border border-white/[0.05]">
                 <table className="w-full border-collapse text-left text-xs">
-                  <thead>
+                  <thead className="sticky top-0 bg-[#0d1119]">
                     <tr className="text-slate-500">
-                      <th className="border-b border-slate-800 pb-1.5 pr-3 font-medium">Aggregate</th>
-                      <th className="border-b border-slate-800 pb-1.5 pr-3 font-medium">Kind</th>
-                      <th className="border-b border-slate-800 pb-1.5 font-medium">Reason</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Aggregate</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Kind</th>
+                      <th className="border-b border-white/[0.06] px-3 py-2 font-medium">Reason</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.exceptions.items.map((e) => (
-                      <tr key={`${e.sequence_num}`} className="border-b border-slate-900">
-                        <td className="py-1 pr-3 font-mono text-slate-300">{e.aggregate_id}</td>
-                        <td className="py-1 pr-3 text-slate-400">{e.kind}</td>
-                        <td className="py-1 text-slate-400">{e.reason}</td>
+                      <tr key={`${e.sequence_num}`} className="border-b border-white/[0.04] transition-colors last:border-0 hover:bg-white/[0.025]">
+                        <td className="px-3 py-2 font-mono text-slate-300">{e.aggregate_id}</td>
+                        <td className="px-3 py-2 text-slate-400">{e.kind}</td>
+                        <td className="px-3 py-2 text-slate-400">{e.reason}</td>
                       </tr>
                     ))}
                   </tbody>
