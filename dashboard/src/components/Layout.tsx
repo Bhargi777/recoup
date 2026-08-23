@@ -32,7 +32,7 @@ export function Layout() {
           ))}
         </nav>
         <div className="mt-auto border-t border-slate-800 p-2 text-[10px] text-slate-600">
-          Phase 8 scaffold — no backend wired
+          Phase 8 — wired to core/api (test mode)
         </div>
       </aside>
 
