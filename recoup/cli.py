@@ -293,6 +293,11 @@ def chaos_command(
     module's docstring for exactly what is real (the diagnose/holdout/gate
     pipeline, the RazorpayClient retry/circuit-breaker path) versus injected
     (the HTTP failure itself, via httpx.MockTransport - never real network).
+
+    Runs against a fresh, throwaway in-memory ledger every time (not the
+    persistent --database-url ledger) - a chaos demo run must be
+    reproducible and must never corrupt or pollute the real audit trail
+    with synthetic chaos records.
     """
     if inject not in INJECTION_TYPES:
         typer.secho(
@@ -302,7 +307,7 @@ def chaos_command(
         raise typer.Exit(code=2)
 
     settings = get_settings()
-    engine = get_engine(settings.database_url)
+    engine = get_engine("sqlite:///:memory:")
     init_ledger_schema(engine)
     init_synthetic_schema(engine)
 
