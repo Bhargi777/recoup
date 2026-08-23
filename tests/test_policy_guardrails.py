@@ -207,6 +207,29 @@ def test_attempt_limits_denies_at_playbook_max(session, playbooks, settings):
     assert not result.allowed
 
 
+def test_attempt_limits_excludes_a_failed_execution(session, playbooks, settings):
+    """Phase 7: an intent whose real send then failed (ACTION_EXECUTION_FAILED)
+    never actually reached the customer - it must not consume attempt budget,
+    or a single gateway outage would wrongly shrink a customer's remaining
+    retry allowance."""
+    ctx = make_context()
+    append_event(
+        session,
+        ctx.aggregate_id,
+        MONEY_ACTION_INTENT,
+        {"action_type": "reminder_message", "idempotency_key": ctx.idempotency_key},
+    )
+    append_event(
+        session,
+        ctx.aggregate_id,
+        ACTION_EXECUTION_FAILED,
+        {"idempotency_key": ctx.idempotency_key, "error": "gateway down"},
+    )
+    result = check_attempt_limits(session, ctx, playbooks["card_expired"], settings)
+    assert result.allowed
+    assert "0 prior attempts" in result.reason
+
+
 def test_attempt_limits_uses_npci_limit_for_mandate_debits(session, playbooks, settings):
     ctx = make_context(root_cause="insufficient_funds", is_emandate_debit=True)
     playbook = playbooks["insufficient_funds"]  # playbook max_attempts is 4, same as NPCI here
@@ -254,6 +277,35 @@ def test_cooldown_allows_after_window_elapses(session, playbooks, settings):
     )
     ctx = make_context(now=datetime.now(UTC) + timedelta(hours=7))
     result = check_cooldown(session, ctx, playbooks["card_expired"], settings)
+    assert result.allowed
+
+
+def test_cooldown_does_not_start_from_a_failed_execution(session, playbooks, settings):
+    """Phase 7: a communication that never actually reached the customer
+    (ACTION_EXECUTION_FAILED) must not start the cooldown clock - this is the
+    exact bug that blocked a same-day recovery retry after a gateway outage
+    in tests/test_eval_batch_runner_recovery.py before this fix. Also
+    regression-covers the fact that check_idempotency's own
+    POLICY_GATE_EVALUATED events (real event data appended earlier in a
+    single evaluate_gate call) must NOT be mistaken for the final outcome of
+    a DIFFERENT, later check evaluating the same idempotency_key."""
+    ctx = make_context()
+    append_event(
+        session,
+        ctx.aggregate_id,
+        MONEY_ACTION_INTENT,
+        {"action_type": "reminder_message", "idempotency_key": ctx.idempotency_key},
+    )
+    append_event(
+        session,
+        ctx.aggregate_id,
+        ACTION_EXECUTION_FAILED,
+        {"idempotency_key": ctx.idempotency_key, "error": "gateway down"},
+    )
+    # "now" is immediately after the failed attempt - well within the 6h
+    # cooldown window IF that failed attempt were (wrongly) counted.
+    ctx_retry = make_context(now=datetime.now(UTC))
+    result = check_cooldown(session, ctx_retry, playbooks["card_expired"], settings)
     assert result.allowed
 
 

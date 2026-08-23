@@ -82,25 +82,66 @@ def _in_npci_peak_window(local_hour: int, local_minute: int) -> bool:
 # --- 1. Idempotency verification -------------------------------------------
 
 
+# Per-check audit trail entries, not action outcomes - every one of the 10
+# checks in a SINGLE evaluate_gate call appends its own POLICY_GATE_EVALUATED
+# event carrying the SAME idempotency_key as the context being evaluated.
+# Since checks run and log sequentially within one evaluate_gate call (see
+# that module's docstring: "exhaustive, not short-circuiting"), a LATER
+# check in that same call would otherwise see an EARLIER check's own
+# POLICY_GATE_EVALUATED entry as "the most recent event for this key" and
+# wrongly treat it as the final outcome - masking a real prior
+# ACTION_EXECUTION_FAILED from an entirely earlier run. These two event
+# types are therefore never a meaningful "outcome" for this lookup and must
+# be skipped.
+_GATE_PROCESS_EVENT_TYPES = frozenset({"POLICY_GATE_EVALUATED", "POLICY_GATE_DECISION"})
+
+
 def _last_event_type_for_idempotency_key(
     session: Session, aggregate_id: str, idempotency_key: str
 ) -> str | None:
-    """The most recent ledger event for this aggregate whose payload carries
-    this idempotency_key, or None if it has never been seen.
+    """The most recent OUTCOME ledger event for this aggregate whose payload
+    carries this idempotency_key, or None if it has never been seen.
 
-    Every event this key can appear in (POLICY_GATE_EVALUATED,
-    POLICY_GATE_DECISION, MONEY_ACTION_INTENT, INCENTIVE_COMMITTED, and every
-    executor event including ACTION_EXECUTION_FAILED) carries
-    ``idempotency_key`` in its payload, and events_for_aggregate returns them
-    in ascending sequence_num order, so the last matching entry is always the
-    final known outcome of the most recent attempt with this key.
+    "Outcome" deliberately excludes POLICY_GATE_EVALUATED/POLICY_GATE_DECISION
+    (see _GATE_PROCESS_EVENT_TYPES above) - the events this is meant to
+    distinguish between are MONEY_ACTION_INTENT (approved, not yet resolved),
+    ACTION_EXECUTION_FAILED (approved, real execution failed - retryable),
+    and every real executor terminal event (approved and resolved,
+    permanently blocked from re-approval). events_for_aggregate returns
+    events in ascending sequence_num order, so the last matching entry is
+    always the final known outcome of the most recent attempt with this key.
     """
     match: str | None = None
     for event in events_for_aggregate(session, aggregate_id):
+        if event.event_type in _GATE_PROCESS_EVENT_TYPES:
+            continue
         payload = json.loads(event.payload_json)
         if payload.get("idempotency_key") == idempotency_key:
             match = event.event_type
     return match
+
+
+def _was_a_real_attempt(session: Session, aggregate_id: str, idempotency_key: str) -> bool:
+    """True unless this idempotency_key's most recent OUTCOME event is
+    ACTION_EXECUTION_FAILED - i.e. unless the communication/action this
+    MONEY_ACTION_INTENT approved never actually reached the customer
+    (gateway down, retries/circuit-breaker exhausted).
+
+    check_attempt_limits and check_cooldown both scan MONEY_ACTION_INTENT
+    events to count "how many times have we actually contacted this
+    customer" / "when did we last actually contact them". A failed
+    execution never contacted anyone, so counting it here would
+    double-penalize a customer for an outage that isn't their fault: it
+    would both burn an attempt out of their max_attempts budget AND start a
+    cooldown clock for a message they never received - on top of
+    check_idempotency correctly allowing the retry, this would still leave
+    it wrongly throttled or re-blocked once retried. See
+    tests/test_eval_batch_runner_recovery.py for the end-to-end case this
+    fixes."""
+    return (
+        _last_event_type_for_idempotency_key(session, aggregate_id, idempotency_key)
+        != ACTION_EXECUTION_FAILED
+    )
 
 
 def check_idempotency(
@@ -208,6 +249,7 @@ def check_attempt_limits(
         1
         for _, payload in _money_action_intents(session, context.aggregate_id)
         if payload.get("action_type") in COMMUNICATION_ACTION_TYPES
+        and _was_a_real_attempt(session, context.aggregate_id, payload.get("idempotency_key"))
     )
     if prior_attempts >= limit:
         return GateResult(
@@ -232,6 +274,13 @@ def check_cooldown(
         (event, payload)
         for event, payload in _money_action_intents(session, context.aggregate_id)
         if payload.get("action_type") in COMMUNICATION_ACTION_TYPES
+        # A MONEY_ACTION_INTENT is logged BEFORE execution (checklist #10),
+        # so an intent whose real send then failed (ACTION_EXECUTION_FAILED)
+        # never actually reached the customer - it must not start a
+        # cooldown clock, or a transient gateway outage would wrongly block
+        # a same-day recovery retry for the full cooldown window. Same
+        # reasoning (and same helper) as check_attempt_limits just above.
+        and _was_a_real_attempt(session, context.aggregate_id, payload.get("idempotency_key"))
     ]
     if not intents:
         return GateResult(
