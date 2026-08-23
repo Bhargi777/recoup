@@ -42,3 +42,6 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "slow: exercises the real end-to-end pipeline (e.g. run_batch over all 600 synthetic records) and can take up to a minute.",
+]

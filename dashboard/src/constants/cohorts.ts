@@ -1,24 +1,24 @@
-// The four at-risk cohorts named in CLAUDE.md's dashboard brief.
-// No backend exists yet (Phase 8 scaffold) — this is UI-only structure,
-// not a claim about real data.
+// Cohort ids match core/ingest/synthetic.py's COHORTS exactly (the API
+// groups /api/pipeline results by these literal strings) - not the
+// dashboard's own naming, so a record's cohort field always round-trips.
 export const COHORTS = [
   {
-    id: 'checkout_failures',
+    id: 'one_time_checkout_failure',
     label: 'Checkout failures',
     description: 'Payment attempts that failed at checkout before completion.',
   },
   {
-    id: 'abandonment',
+    id: 'checkout_abandonment',
     label: 'Abandonment',
     description: 'Sessions or carts abandoned before payment was attempted.',
   },
   {
-    id: 'mandate_failures',
+    id: 'subscription_mandate_failure',
     label: 'Subscription / mandate failures',
     description: 'Recurring e-mandate or AutoPay debits that failed.',
   },
   {
-    id: 'overdue_invoices',
+    id: 'overdue_b2b_invoice',
     label: 'Overdue invoices',
     description: 'Invoices past their due date with no successful payment.',
   },

@@ -2,8 +2,9 @@
 
 AI-powered revenue recovery engine for Razorpay **Test Mode** (Buildathon Track 03: AI Revenue Recovery).
 
-> Status: Phase 7 (Chaos + Graceful Failure). The architecture, ground rules, and money-action
-> invariants live in [CLAUDE.md](CLAUDE.md) — read that first.
+> Status: Phase 8 (Dashboard + Report) — feature complete. The architecture, ground rules, and
+> money-action invariants live in [CLAUDE.md](CLAUDE.md) — read that first. Real, freshly-run
+> numbers for this phase are in [REPORT.md](REPORT.md).
 
 ## Quickstart
 
@@ -488,3 +489,108 @@ observational here; `run_batch` is the only code path that reaches an executor. 
 `webhook_replay` proves "a duplicate delivery never double-writes the domain ledger
 event," and the stronger "cannot produce a second real action" guarantee is proven at the
 run-batch/executor layer instead, by `duplicate_callback`.
+
+## Dashboard (Phase 8)
+
+`dashboard/` is a React + Vite + TypeScript + Tailwind operator console, now wired to a
+real read-only API (`core/api`, mounted onto `core/ingest/webhook_app.py`) instead of the
+Phase 8 scaffold's placeholder state. Run the API and the dashboard in two terminals:
+
+```bash
+# terminal 1 — the API (reuses the existing ingest FastAPI app)
+recoup serve --port 8000
+
+# terminal 2 — the dashboard dev server
+cd dashboard
+cp .env.example .env.local   # VITE_API_BASE_URL, defaults to http://127.0.0.1:8000
+npm install
+npm run dev
+```
+
+What's live now, per page:
+
+- **Pipeline** — real `AtRiskRecord` rows grouped by cohort (`/api/pipeline`), including
+  each record's diagnosed root cause where one exists.
+- **Decisions** — real `POLICY_GATE_DECISION` ledger events (`/api/decisions`) with a
+  plain-English "why" derived deterministically from the gate's own `reason` string — no
+  LLM involved in that explanation.
+- **Ledger** — paginated real `LedgerEvent` rows (`/api/ledger`) plus a working "Verify
+  chain" button that calls the real `core.ledger.verify_chain` (`/api/ledger/verify`).
+- **Guardrails** — real blocked-check rows from `POLICY_GATE_EVALUATED` events
+  (`/api/guardrails`), explicitly distinguishing a correctly-blocked action from a
+  guardrail violation (see REPORT.md section 4).
+- **Metrics** — real diagnosis P/R/F1 (`core.eval.diagnosis_eval.evaluate_holdout`) and
+  real, **[SIMULATED]**-labeled uplift + Wilson CI (`core.eval.batch_runner.run_batch`),
+  with the label rendered directly on the metric tiles and panels, not hidden in a
+  tooltip. This endpoint runs the real pipeline live and can take up to a minute.
+- **Kill switch** — the top-bar control now calls the real `GET`/`POST /api/kill-switch`,
+  which itself only calls `core.policy.activate_kill_switch` /
+  `deactivate_kill_switch` — real ledger-replayed state, not a demo stub.
+
+Nothing in `dashboard/` is scaffold-only as of this phase. CORS on the API is permissive
+for `localhost`/`127.0.0.1` origins only — a deliberate, disclosed demo-environment
+choice (see `core/ingest/webhook_app.py`), not a production posture.
+
+## AI judgment
+
+CLAUDE.md §4 is explicit that LLMs are never the sole authority for a money action. This
+section collects, in one place, every point across all eight phases where this system
+deliberately chose a deterministic path over an LLM, and the one place it uses an LLM at
+all:
+
+**Deterministic, no LLM involved:**
+
+- **Root-cause diagnosis** — `core/diagnose/mapper.py`'s closed-taxonomy lookup resolves
+  diagnoses first; on this repo's committed synthetic dataset it reaches 100% coverage
+  (see REPORT.md section 2 — a real, freshly-measured number, not an estimate).
+- **The policy gate** — `core/policy/gate.py` and all 10 checks in
+  `core/policy/guardrails.py` (budget, attempt limits, cooldown, quiet hours, RBI/NPCI
+  mandate rules, kill switch) are plain Python comparisons against ledger-replayed state.
+  No model call anywhere in `core/policy`.
+- **Message drafting** — `core/act/templates.py` is a fixed set of f-string templates
+  keyed by root cause. `reminder_message`, `incentive_offer`, and
+  `pre_debit_notification` in `core/act/executors.py` call only these templates; nothing
+  customer-facing is model-generated.
+- **The holdout split** — `core/experiment/holdout.py`'s treatment/control assignment is
+  a deterministic hash of `(customer_id, split_seed)`, reproducible byte-for-byte on any
+  re-run — not a random draw a model could influence.
+- **The decisions dashboard's "why"** — `core/api/decisions.py` derives its plain-English
+  explanation from the gate's own `reason` string with a fixed lookup table, not a
+  generated summary.
+
+**The one LLM integration point, with a hard confidence gate:**
+
+- `core/diagnose/llm_classifier.py` is a secondary fallback, only ever consulted when the
+  deterministic mapper finds no match. Its output is a label + confidence; a plain
+  Python comparison (`confidence >= CONFIDENCE_THRESHOLD` = 0.80,
+  `apply_confidence_gate`) — never the model itself — decides whether to trust it or
+  route to `ABSTAIN`. Every `ABSTAIN` goes to the human exception queue
+  (`EXCEPTION_QUEUE_ENQUEUED` / `DIAGNOSIS_ABSTAINED`). No `ANTHROPIC_API_KEY` is
+  configured in this environment, so this path was not exercised in REPORT.md's real run
+  — it is covered instead by `tests/test_diagnose_llm_classifier.py`'s injected-fake unit
+  tests, which exercise both the confident-label and the abstain branches.
+
+## Demo script (~3 minutes)
+
+1. **Boot both processes** (see "Dashboard" above): `recoup serve --port 8000` in one
+   terminal, `npm run dev` in `dashboard/` in another. Open the dashboard URL.
+2. **Generate data**: `recoup generate-synthetic-data` — point at the **Pipeline** page;
+   refresh to show 600 real records across the four cohorts.
+3. **Diagnose**: `recoup eval-diagnosis` — read the real macro F1 / confusion matrix /
+   abstain rate printed in the terminal; note it matches REPORT.md section 2.
+4. **Run the batch**: `recoup run-batch` — point at the **Decisions** page for the real
+   `POLICY_GATE_DECISION` feed with plain-English reasons, then **Metrics** for the real
+   (clearly [SIMULATED]-labeled) uplift + Wilson CI and the exception list.
+5. **Show a guardrail actually block something**: run `recoup run-batch` a *second* time
+   against the same database — point at the **Guardrails** page; `idempotency_verification`
+   and `cooldown_interval` now show real non-zero blocked counts, proving the gate refuses
+   to re-approve an already-actioned record.
+6. **Prove zero violations**: `recoup chaos --inject duplicate_callback` — walk through the
+   printed `[PASS]` lines (exactly one HTTP request across two attempts, exactly one
+   `MONEY_ACTION_INTENT`); this is the literal "duplicate can't double-charge" guarantee.
+7. **Flip the kill switch**: click it live in the dashboard top bar, then show
+   `recoup kill-switch status` printing the same real state from the terminal — one
+   source of truth, two views.
+8. **Close on the ledger**: `recoup verify-chain` (or the dashboard's Ledger page "Verify
+   chain" button) — point at the real event count and `ok=True`, then note REPORT.md as
+   the leave-behind with every number in this demo reproduced and cited.
