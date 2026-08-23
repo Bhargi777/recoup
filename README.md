@@ -447,14 +447,31 @@ same idempotency key and checks the mocked Razorpay transport's actual request c
 exactly 1 across both runs, with the second `evaluate_gate` call itself blocked by
 `check_idempotency` rather than silently re-approved.
 
-**Two real gaps were found and fixed while building this, not papered over with a test
-that dodges them:**
+**Real gaps were found and fixed while building this, not papered over with a test that
+dodges them:**
 - `check_idempotency` previously blocked an idempotency_key permanently once
   `MONEY_ACTION_INTENT` was recorded, even if the real executor call that followed never
   actually happened (gateway down, retries/circuit-breaker exhausted) — stranding that
-  record forever. It now treats a key whose most recent event is the new
+  record forever. It now treats a key whose most recent OUTCOME event is the new
   `ACTION_EXECUTION_FAILED` as retryable, while a key that reached a real terminal action
   stays permanently blocked.
+- `check_attempt_limits` and `check_cooldown` had the identical blind spot one layer
+  deeper: both counted every `MONEY_ACTION_INTENT` as a real customer-facing attempt, even
+  one whose execution then failed. Fixing only `check_idempotency` was not enough — a
+  retried record would pass idempotency but still get silently re-blocked by an artificial
+  cooldown window (started by a message the customer never received) or an inflated
+  attempt count. Both checks now share one `_was_a_real_attempt` helper with the same
+  retry-after-failure logic. Finding this took an actual two-run integration test, not
+  just a unit test of `check_idempotency` in isolation — the unit-level fix looked
+  complete and still left the queue stuck.
+- Building that shared logic surfaced a subtler bug in the lookup itself:
+  `evaluate_gate` logs a `POLICY_GATE_EVALUATED` event after *every* one of the 10 checks,
+  each carrying the same `idempotency_key` as the context under evaluation. A naive "what
+  was the last event for this key" scan run partway through a single `evaluate_gate` call
+  would see an *earlier check's own* `POLICY_GATE_EVALUATED` entry from that same call and
+  mistake it for the final outcome — masking a real `ACTION_EXECUTION_FAILED` from an
+  earlier run. The lookup now skips `POLICY_GATE_EVALUATED`/`POLICY_GATE_DECISION`
+  entries, since neither is ever a real action outcome.
 - `run_batch` previously let a live executor's `RazorpayAPIError`/`CircuitOpenError`/
   `httpx.TransportError` propagate and abort the entire batch, silently never processing
   any record after the failing one. It now catches exactly those transient failures per
