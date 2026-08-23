@@ -2,6 +2,11 @@
 
 :root {
   color-scheme: dark;
+  --bg: #0a0e17;
+  --bg-raised: #0f1420;
+  --border: rgba(148, 163, 184, 0.12);
+  --border-strong: rgba(148, 163, 184, 0.2);
+  --accent: #38bdf8;
 }
 
 html,
@@ -11,16 +16,39 @@ body,
 }
 
 body {
-  @apply bg-slate-950 text-slate-200 antialiased;
-  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  @apply antialiased;
+  background: var(--bg);
+  color: #dde3ee;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  font-feature-settings: 'cv11', 'ss01', 'tnum';
+  -webkit-font-smoothing: antialiased;
 }
 
 code,
 pre,
 .font-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 ::selection {
-  background: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.3);
+}
+
+/* Slim, quiet scrollbars — dense tables shouldn't fight for attention */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.35);
 }

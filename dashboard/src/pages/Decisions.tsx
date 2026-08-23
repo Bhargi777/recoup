@@ -71,34 +71,43 @@ export function Decisions() {
         </Panel>
       )}
 
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2.5">
         {data?.decisions.map((d) => (
-          <Panel key={d.event_id}>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-4">
+          <Panel key={d.event_id} className="transition-colors hover:border-white/[0.12]">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-4">
               <div>
-                <dt className="text-slate-500">Aggregate / customer</dt>
-                <dd className="font-mono text-slate-300">{d.aggregate_id}</dd>
+                <dt className="text-[11px] uppercase tracking-wide text-slate-500">Aggregate / customer</dt>
+                <dd className="mt-1 font-mono text-slate-300">{d.aggregate_id}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Diagnosed cause</dt>
-                <dd className="font-mono text-slate-300">{d.root_cause ?? '—'}</dd>
+                <dt className="text-[11px] uppercase tracking-wide text-slate-500">Diagnosed cause</dt>
+                <dd className="mt-1 font-mono text-slate-300">{d.root_cause ?? '—'}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Chosen action</dt>
-                <dd className="font-mono text-slate-300">{d.action_type ?? '—'}</dd>
+                <dt className="text-[11px] uppercase tracking-wide text-slate-500">Chosen action</dt>
+                <dd className="mt-1 font-mono text-slate-300">{d.action_type ?? '—'}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Policy gate result</dt>
-                <dd
-                  className={`font-mono ${d.status === 'ALLOW' ? 'text-emerald-400' : 'text-amber-400'}`}
-                >
-                  {d.status}
+                <dt className="text-[11px] uppercase tracking-wide text-slate-500">Policy gate result</dt>
+                <dd className="mt-1">
+                  <span
+                    className={`inline-flex items-center gap-1.5 font-mono text-xs ${
+                      d.status === 'ALLOW' ? 'text-emerald-400' : 'text-amber-400'
+                    }`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        d.status === 'ALLOW' ? 'bg-emerald-400' : 'bg-amber-400'
+                      }`}
+                    />
+                    {d.status}
+                  </span>
                 </dd>
               </div>
             </div>
-            <div className="mt-3 rounded border border-slate-800 bg-slate-950/60 p-2">
-              <p className="text-[10px] uppercase tracking-wide text-slate-500">Why</p>
-              <p className="mt-1 text-xs text-slate-400">{d.why}</p>
+            <div className="mt-3 rounded-lg border border-white/[0.05] bg-black/20 p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Why</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">{d.why}</p>
             </div>
           </Panel>
         ))}
