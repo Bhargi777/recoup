@@ -5,6 +5,7 @@ tamper event, not a supported operation. See
 ``.claude/skills/audit-ledger/SKILL.md``.
 """
 
+import threading
 import uuid
 from typing import Any
 
@@ -12,6 +13,14 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from core.ledger.hashing import canonicalize_payload, compute_hash
 from core.ledger.models import GENESIS_HASH, LedgerEvent, utc_now_iso
+
+# Serializes the read-HEAD-then-insert critical section below across threads
+# within one process (e.g. FastAPI's threadpool executing two concurrent
+# requests that both append events). This makes a single-process deployment
+# safe against the exact race append_event's docstring already flagged;
+# multiple separate processes/machines writing to the same database still
+# need external serialization (a DB-level lock), which is unchanged.
+_APPEND_LOCK = threading.Lock()
 
 
 def get_engine(database_url: str):
@@ -36,33 +45,36 @@ def append_event(
 ) -> LedgerEvent:
     """Append one immutable event, chaining it to the current HEAD.
 
-    Reads-then-writes HEAD within the caller's transaction; callers sharing a
-    session across concurrent writers are responsible for serializing access
-    (e.g. one writer process, or a DB-level lock) to avoid a fork in the chain.
+    Reads-then-writes HEAD; serialized process-wide by ``_APPEND_LOCK`` so two
+    threads (e.g. two concurrent FastAPI requests) can never both read the
+    same HEAD and race on ``sequence_num``. Multiple separate writer
+    processes/machines still need external serialization (a DB-level lock)
+    to avoid a fork in the chain.
     """
-    previous = _latest_event(session)
-    sequence_num = 0 if previous is None else previous.sequence_num + 1
-    previous_hash = GENESIS_HASH if previous is None else previous.current_hash
-    timestamp_utc = utc_now_iso()
+    with _APPEND_LOCK:
+        previous = _latest_event(session)
+        sequence_num = 0 if previous is None else previous.sequence_num + 1
+        previous_hash = GENESIS_HASH if previous is None else previous.current_hash
+        timestamp_utc = utc_now_iso()
 
-    current_hash = compute_hash(
-        sequence_num, timestamp_utc, aggregate_id, event_type, payload, previous_hash
-    )
+        current_hash = compute_hash(
+            sequence_num, timestamp_utc, aggregate_id, event_type, payload, previous_hash
+        )
 
-    event = LedgerEvent(
-        sequence_num=sequence_num,
-        event_id=f"evt_{uuid.uuid4().hex}",
-        timestamp_utc=timestamp_utc,
-        aggregate_id=aggregate_id,
-        event_type=event_type,
-        payload_json=canonicalize_payload(payload),
-        previous_hash=previous_hash,
-        current_hash=current_hash,
-    )
-    session.add(event)
-    session.commit()
-    session.refresh(event)
-    return event
+        event = LedgerEvent(
+            sequence_num=sequence_num,
+            event_id=f"evt_{uuid.uuid4().hex}",
+            timestamp_utc=timestamp_utc,
+            aggregate_id=aggregate_id,
+            event_type=event_type,
+            payload_json=canonicalize_payload(payload),
+            previous_hash=previous_hash,
+            current_hash=current_hash,
+        )
+        session.add(event)
+        session.commit()
+        session.refresh(event)
+        return event
 
 
 def list_events(session: Session) -> list[LedgerEvent]:
