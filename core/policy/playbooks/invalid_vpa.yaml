@@ -1,0 +1,23 @@
+root_cause: invalid_vpa
+trigger_conditions:
+  cohorts:
+    - one_time_checkout_failure
+intervention_ladder:
+  - step: reminder_message
+    offset: "T+0"
+    channel: sms
+    notes: "Customer entered a malformed or non-existent VPA."
+  - step: payment_link
+    offset: "T+2h"
+    channel: email
+  - step: escalate_to_human
+    offset: "T+48h"
+incentive_ceiling:
+  type: amount_inr
+  value: 0
+max_attempts: 3
+stopping_rules:
+  - already_paid
+  - max_attempts_reached
+  - customer_opted_out
+  - kill_switch_active

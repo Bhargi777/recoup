@@ -1,0 +1,24 @@
+root_cause: abandonment
+trigger_conditions:
+  cohorts:
+    - checkout_abandonment
+intervention_ladder:
+  - step: reminder_message
+    offset: "T+1h"
+    channel: sms
+    notes: "Customer never completed authentication or the UPI collect request."
+  - step: payment_link
+    offset: "T+24h"
+    channel: email
+  - step: incentive_offer
+    offset: "T+72h"
+    notes: "Small nudge to complete an abandoned checkout."
+incentive_ceiling:
+  type: percent
+  value: 5
+max_attempts: 3
+stopping_rules:
+  - already_paid
+  - max_attempts_reached
+  - customer_opted_out
+  - kill_switch_active

@@ -1,0 +1,17 @@
+root_cause: risk_blocked
+trigger_conditions:
+  cohorts:
+    - one_time_checkout_failure
+intervention_ladder:
+  - step: escalate_to_human
+    offset: "T+0"
+    notes: "Issuer/network risk engine blocked the payment. No automated retry or incentive - route straight to a human review queue."
+incentive_ceiling:
+  type: amount_inr
+  value: 0
+max_attempts: 1
+stopping_rules:
+  - already_paid
+  - max_attempts_reached
+  - customer_opted_out
+  - kill_switch_active

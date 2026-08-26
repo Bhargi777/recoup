@@ -1,0 +1,21 @@
+root_cause: card_blocked
+trigger_conditions:
+  cohorts:
+    - one_time_checkout_failure
+    - subscription_mandate_failure
+intervention_ladder:
+  - step: reminder_message
+    offset: "T+0"
+    channel: sms
+    notes: "Card/debit instrument is blocked by the issuer; customer must contact their bank."
+  - step: escalate_to_human
+    offset: "T+24h"
+incentive_ceiling:
+  type: amount_inr
+  value: 0
+max_attempts: 2
+stopping_rules:
+  - already_paid
+  - max_attempts_reached
+  - customer_opted_out
+  - kill_switch_active
