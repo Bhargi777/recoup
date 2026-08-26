@@ -109,12 +109,22 @@ estimate with that in mind, not as a precise number.
 
 These are two different claims and this report does not conflate them.
 
+**Addendum (2026-08-26)**: this section's original run (Phase 7, four scenarios)
+predates the `check_not_already_settled` guardrail and chaos scenario 5,
+added after a self-review found `stopping_rules: [already_paid]` was
+schema-validated but never runtime-enforced (README's Policy Engine section
+has the full disclosure, including the two `stopping_rules` entries -
+`max_attempts_reached`, `customer_opted_out` - that remain open). Scenario
+5's row below is from a fresh, real run captured at the time of this
+addendum; the other four rows are unchanged from the original report run
+and are not re-timestamped.
+
 ### 4a. Guardrail violations: 0
 
 A guardrail violation would mean the gate was bypassed entirely — a double
-charge, a budget-cap breach, a kill-switch-ignored action. Phase 7's four
+charge, a budget-cap breach, a kill-switch-ignored action. Phase 7's five
 chaos scenarios exist specifically to prove this never happens, and all
-four passed for real in this run:
+five passed for real:
 
 | Scenario | Result | Key real evidence |
 |---|---|---|
@@ -122,6 +132,7 @@ four passed for real in this run:
 | rate_limit | PASS (6/6 checks) | Honored the server's real Retry-After: 3 header exactly (time.sleep([3.0]), no blind jitter); exactly one action executed after the 429; ledger chain valid (244 events checked) |
 | webhook_replay | PASS (4/4 checks) | First delivery recorded, identical replay deduped (status="duplicate"); PAYMENT_LINK_PAID written exactly once; ledger chain valid (3 events checked) |
 | duplicate_callback | PASS (7/7 checks) | Second evaluate_gate() call for the same idempotency_key was correctly BLOCKED (idempotency_verification, cooldown_interval); the duplicate executor call was refused, never re-sent; exactly 1 HTTP request across both runs; exactly one MONEY_ACTION_INTENT and one ACTION_PAYMENT_LINK_EXECUTED_LIVE recorded; ledger chain valid (255 events checked) |
+| paid_during_flight | PASS (7/7 checks) | Seeded a real, deterministically-selected TREATMENT-arm record (`synth_one_time_checkout_failure_0000`); a real-shaped `payment_link.paid` webhook (with `reference_id` set the way Razorpay echoes it) was recorded; a batch run over that same database produced exactly one `ACTION_SKIPPED_ALREADY_PAID` event and zero executor-dispatch events for that record after the webhook fired; ledger chain valid (242 events checked) |
 
 Every scenario also independently re-verified the hash chain (verify_chain)
 after injection — tamper detection stayed green throughout.

@@ -195,12 +195,31 @@ out-of-range ceiling fails loudly (`PlaybookLoadError`), never silently no-ops.
 `core/policy/loader.py`'s `validate_taxonomy_completeness` asserts a 1:1 mapping between
 playbooks and taxonomy labels in both directions.
 
-**2. The 10 guardrail checks (`core/policy/guardrails.py`)** — every check from
+**Honest disclosure — not every `stopping_rules` entry is runtime-enforced yet.** Every
+playbook's `stopping_rules` list is schema-validated (each entry must be a known string),
+but only `already_paid` is actually checked at runtime today, via check #11 below.
+`max_attempts_reached` and `customer_opted_out` are validated as well-formed YAML and
+nothing more — no code path currently consults them to stop an intervention ladder. This
+was found in a self-review before it was found by a judge; closing `already_paid` (the
+sharpest of the three — a paid customer could otherwise be re-contacted) was scoped and
+shipped as check #11 below. The other two remain open, disclosed here rather than implied
+to be handled by the schema validation alone.
+
+**2. The 11 guardrail checks (`core/policy/guardrails.py`)** — the 10 checks from
 [`.claude/skills/money-action-gate/SKILL.md`](.claude/skills/money-action-gate/SKILL.md)
-§1 is its own independently testable function: idempotency verification, global budget
+§1, each its own independently testable function (idempotency verification, global budget
 meter, cohort incentive ceiling, customer/NPCI attempt limits, cooldown interval, quiet
 hours (DND), RBI e-mandate pre-debit notice, NPCI peak-hour restriction, kill switch, and
-ledger-writability (the pre-action-event readiness check).
+ledger-writability), **plus an 11th, `check_not_already_settled`** — a recoup addition
+beyond the original SKILL.md checklist, added after the review above found
+`stopping_rules: [already_paid]` was schema-validated but never runtime-enforced. It
+refuses any action against a record the ledger already shows a `PAYMENT_LINK_PAID` or
+`SUBSCRIPTION_CHARGED` event for, correlating a webhook back to the record via
+`reference_id` (`execute_payment_link` sets it to the record's own id on creation, and a
+real Razorpay webhook echoes it back on the entity). `core/eval/batch_runner.py` also
+emits a distinctly-named `ACTION_SKIPPED_ALREADY_PAID` event on top of the check's own
+generic gate logging, so "was this skipped because it was already paid" is answerable by
+event type alone. See chaos scenario 5 below for the end-to-end proof.
 
 **3. Replay-based kill switch and budget meter** — per the audit-ledger state-replay
 contract, neither is a separate mutable table. The kill switch's state is whichever of
@@ -217,7 +236,7 @@ recoup kill-switch off --reason "..."  # appends KILL_SWITCH_DEACTIVATED, then r
 ```
 
 **4. The composed gate (`core/policy/gate.py`)** — `evaluate_gate(session, context)`
-runs all 10 checks **exhaustively** (not short-circuiting): every check always runs, and
+runs all 11 checks **exhaustively** (not short-circuiting): every check always runs, and
 every individual result — pass or fail — is written to the ledger as
 `POLICY_GATE_EVALUATED`, followed by one `POLICY_GATE_DECISION` event for the overall
 outcome. This is deliberate: the skill spec requires every check's decision on the
@@ -364,7 +383,7 @@ payment behavior.** There is no real customer traffic or live test-mode credenti
 this environment to measure a real uplift against. This is not fabrication: fabrication
 would be presenting `+0.0584` as real recovered revenue. What is real and independently
 verifiable here is the *mechanism* — a genuine deterministic diagnosis, a genuine
-deterministic randomized holdout split, a genuine 10-check policy gate, genuine-or-honestly-
+deterministic randomized holdout split, a genuine 11-check policy gate, genuine-or-honestly-
 simulated executors, and a correctly implemented Wilson-CI uplift calculation — exercised
 end to end against synthetic inputs, exactly like Phase 3's synthetic data and Phase 4's
 synthetic held-out eval already were. `records processed: 600`, `51.94s`, and the
@@ -427,10 +446,11 @@ diagnose → holdout → gate batch through `core.eval.batch_runner.run_batch` i
 touches the network) or the real webhook handler:
 
 ```bash
-recoup chaos --inject gateway_5xx        # 2 injected 502s, then a real retry succeeds
-recoup chaos --inject rate_limit         # a 429 with Retry-After, honored verbatim
-recoup chaos --inject webhook_replay     # the same webhook delivered twice
-recoup chaos --inject duplicate_callback # the same record run through gate+executor twice
+recoup chaos --inject gateway_5xx          # 2 injected 502s, then a real retry succeeds
+recoup chaos --inject rate_limit           # a 429 with Retry-After, honored verbatim
+recoup chaos --inject webhook_replay       # the same webhook delivered twice
+recoup chaos --inject duplicate_callback   # the same record run through gate+executor twice
+recoup chaos --inject paid_during_flight   # a payment_link.paid webhook races the next batch pass
 ```
 
 Each prints a `[PASS]`/`[FAIL]` line per check with a literal mock-call-count or
@@ -447,6 +467,17 @@ one record through the real `evaluate_gate` → `execute_payment_link` cycle twi
 same idempotency key and checks the mocked Razorpay transport's actual request count —
 exactly 1 across both runs, with the second `evaluate_gate` call itself blocked by
 `check_idempotency` rather than silently re-approved.
+
+**`paid_during_flight` is scenario 5**, added after a self-review found `stopping_rules:
+[already_paid]` was schema-validated but never runtime-enforced (see the Policy Engine
+section's disclosure above). It seeds a real, deterministically-selected TREATMENT-arm
+record — not a hand-picked trivial case — fires a real-shaped `payment_link.paid` webhook
+for it (with `reference_id` set the way a real Razorpay webhook would echo it back), then
+runs a batch that would otherwise dispatch to that record. Asserts exactly one
+`ACTION_SKIPPED_ALREADY_PAID` event and zero executor-dispatch events for that record
+*after* the webhook fired (a pre-existing dispatch from an earlier scenario sharing the
+same database, if any, is explicitly out of scope for this assertion — see the module
+docstring for why that distinction is real, not hand-waved).
 
 **Real gaps were found and fixed while building this, not papered over with a test that
 dodges them:**
@@ -466,7 +497,7 @@ dodges them:**
   just a unit test of `check_idempotency` in isolation — the unit-level fix looked
   complete and still left the queue stuck.
 - Building that shared logic surfaced a subtler bug in the lookup itself:
-  `evaluate_gate` logs a `POLICY_GATE_EVALUATED` event after *every* one of the 10 checks,
+  `evaluate_gate` logs a `POLICY_GATE_EVALUATED` event after *every* one of the checks,
   each carrying the same `idempotency_key` as the context under evaluation. A naive "what
   was the last event for this key" scan run partway through a single `evaluate_gate` call
   would see an *earlier check's own* `POLICY_GATE_EVALUATED` entry from that same call and
@@ -543,7 +574,7 @@ all:
 - **Root-cause diagnosis** — `core/diagnose/mapper.py`'s closed-taxonomy lookup resolves
   diagnoses first; on this repo's committed synthetic dataset it reaches 100% coverage
   (see REPORT.md section 2 — a real, freshly-measured number, not an estimate).
-- **The policy gate** — `core/policy/gate.py` and all 10 checks in
+- **The policy gate** — `core/policy/gate.py` and all 11 checks in
   `core/policy/guardrails.py` (budget, attempt limits, cooldown, quiet hours, RBI/NPCI
   mandate rules, kill switch) are plain Python comparisons against ledger-replayed state.
   No model call anywhere in `core/policy`.
