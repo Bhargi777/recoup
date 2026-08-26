@@ -11,16 +11,18 @@ the actual 600 Phase-3 synthetic records in --dry-run mode.
 import json
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from core.config import Settings
 from core.eval.batch_runner import (
+    ACTION_SKIPPED_ALREADY_PAID,
     HOLDOUT_NO_INTERVENTION,
     SIMULATED_OUTCOME_RECORDED,
     run_batch,
 )
 from core.ingest.synthetic import AtRiskRecord, init_synthetic_schema, run_generation
-from core.ledger import get_engine, init_ledger_schema, list_events
+from core.ingest.webhooks import PAYMENT_LINK_PAID
+from core.ledger import append_event, get_engine, init_ledger_schema, list_events
 
 
 @pytest.fixture()
@@ -202,6 +204,51 @@ def test_blocked_records_are_tracked_separately_from_the_comparison(session, set
     types = {e.event_type for e in list_events(session)}
     assert "ACTION_MESSAGE_DRAFTED" not in types
     assert "EXCEPTION_QUEUE_ENQUEUED" not in types
+
+
+def test_already_paid_record_is_skipped_not_re_dispatched(session, settings):
+    """A record whose ledger already shows PAYMENT_LINK_PAID must never be
+    dispatched to again - core.policy.guardrails.check_not_already_settled
+    blocks it at the gate, and run_batch additionally emits the distinctly-
+    named ACTION_SKIPPED_ALREADY_PAID so "was this skipped because it was
+    already paid" is answerable by event_type alone. This is the real gap
+    that stopping_rules: [already_paid] was schema-validated but never
+    runtime-enforced for, until this check - see core/policy/schema.py and
+    the README's Guardrails section disclosure."""
+    _seed_small(session, 20)
+    paid_record = session.exec(select(AtRiskRecord)).first()
+    append_event(
+        session,
+        paid_record.id,  # direct aggregate_id match - simplest real case
+        PAYMENT_LINK_PAID,
+        {"event_id": "evt_test_paid", "raw": {}},
+    )
+
+    report = run_batch(session, mode="dry_run", settings=settings)
+
+    assert report.blocked_reasons.get("not_already_settled", 0) >= 1
+
+    skip_events = [
+        e
+        for e in list_events(session)
+        if e.event_type == ACTION_SKIPPED_ALREADY_PAID and e.aggregate_id == paid_record.id
+    ]
+    assert len(skip_events) == 1
+    payload = json.loads(skip_events[0].payload_json)
+    assert payload["idempotency_key"]
+    assert "PAYMENT_LINK_PAID" in payload["reason"]
+
+    # No executor was ever reached for this record.
+    executor_types = {
+        "ACTION_MESSAGE_DRAFTED",
+        "ACTION_SIMULATED_DRY_RUN",
+        "ACTION_PAYMENT_LINK_EXECUTED_LIVE",
+        "EXCEPTION_QUEUE_ENQUEUED",
+        "ACTION_MANDATE_RETRY_SCHEDULED",
+    }
+    for event in list_events(session):
+        if event.aggregate_id == paid_record.id:
+            assert event.event_type not in executor_types
 
 
 def test_full_batch_of_600_synthetic_records_dry_run(settings):
