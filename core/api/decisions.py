@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
 from core.api.deps import get_session
-from core.ledger import list_events
+from core.ledger import LedgerEvent, list_events
 
 router = APIRouter(prefix="/api/decisions", tags=["decisions"])
 
@@ -83,3 +83,81 @@ def get_decisions(
         )
 
     return {"total_available": len(events), "returned": len(decisions), "decisions": decisions}
+
+
+def find_decision_by_key(session: Session, key: str) -> LedgerEvent | None:
+    """The POLICY_GATE_DECISION event matching ``key`` - either its own
+    event_id, or the idempotency_key carried in its payload. Either form is
+    accepted since a decision's event_id is what the Decisions feed links
+    from, but an idempotency_key is what an operator debugging a specific
+    money action already has on hand from other ledger events."""
+    for event in list_events(session):
+        if event.event_type != POLICY_GATE_DECISION:
+            continue
+        if event.event_id == key:
+            return event
+        payload = json.loads(event.payload_json)
+        if payload.get("idempotency_key") == key:
+            return event
+    return None
+
+
+def replay_decision(session: Session, key: str) -> dict | None:
+    """Full replay of one decision: the matching POLICY_GATE_DECISION event
+    plus every sibling ledger event sharing its idempotency_key (every
+    POLICY_GATE_EVALUATED check, MONEY_ACTION_INTENT/INCENTIVE_COMMITTED if
+    ALLOWed, and whatever the executor layer or run_batch recorded), in
+    sequence order, with the exact same plain-English "why"
+    ``get_decisions`` already computes - reused directly via
+    ``_plain_english_why``, not reimplemented. Returns None if ``key``
+    matches no decision - callers (the CLI, the API route) turn that into
+    an explicit "not found" response rather than an empty/silent one."""
+    decision_event = find_decision_by_key(session, key)
+    if decision_event is None:
+        return None
+
+    decision_payload = json.loads(decision_event.payload_json)
+    idempotency_key = decision_payload.get("idempotency_key")
+    status = decision_payload.get("status", "")
+    reason = decision_payload.get("reason", "")
+
+    siblings = []
+    for event in list_events(session):
+        payload = json.loads(event.payload_json)
+        if payload.get("idempotency_key") == idempotency_key:
+            siblings.append((event, payload))
+    siblings.sort(key=lambda pair: pair[0].sequence_num)
+
+    return {
+        "event_id": decision_event.event_id,
+        "idempotency_key": idempotency_key,
+        "aggregate_id": decision_event.aggregate_id,
+        "root_cause": decision_payload.get("root_cause"),
+        "cohort": decision_payload.get("cohort"),
+        "action_type": decision_payload.get("action_type"),
+        "status": status,
+        "reason": reason,
+        "why": _plain_english_why(status, reason),
+        "events": [
+            {
+                "sequence_num": e.sequence_num,
+                "event_id": e.event_id,
+                "timestamp_utc": e.timestamp_utc,
+                "aggregate_id": e.aggregate_id,
+                "event_type": e.event_type,
+                "payload": p,
+            }
+            for e, p in siblings
+        ],
+    }
+
+
+@router.get("/{event_id}")
+def get_decision_replay(event_id: str, session: Session = Depends(get_session)) -> dict:
+    """Dashboard click-through counterpart to `recoup replay` - same
+    underlying replay_decision(), exposed as a route so a Decisions-feed
+    card (already keyed by event_id) can link straight into this view."""
+    result = replay_decision(session, event_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"no decision found for {event_id!r}")
+    return result

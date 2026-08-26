@@ -79,6 +79,43 @@ def test_decisions_lists_allow_and_block_with_plain_english_why(client) -> None:
     assert "Blocked" in why_by_key["key_block_1"]
 
 
+def test_decision_replay_route_matches_the_cli_and_the_feed(client) -> None:
+    c, db_path = client
+    _seed_one_allow_and_one_block(db_path)
+
+    feed = c.get("/api/decisions").json()
+    allow_entry = next(d for d in feed["decisions"] if d["idempotency_key"] == "key_allow_1")
+
+    resp = c.get(f"/api/decisions/{allow_entry['event_id']}")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["event_id"] == allow_entry["event_id"]
+    assert body["idempotency_key"] == "key_allow_1"
+    assert body["why"] == allow_entry["why"]
+    event_types = {e["event_type"] for e in body["events"]}
+    assert "POLICY_GATE_EVALUATED" in event_types
+    assert "POLICY_GATE_DECISION" in event_types
+    assert "MONEY_ACTION_INTENT" in event_types  # this decision was an ALLOW
+
+
+def test_decision_replay_route_by_idempotency_key(client) -> None:
+    c, db_path = client
+    _seed_one_allow_and_one_block(db_path)
+
+    resp = c.get("/api/decisions/key_block_1")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["idempotency_key"] == "key_block_1"
+    assert body["status"] == "BLOCKED"
+
+
+def test_decision_replay_route_404s_on_unknown_id(client) -> None:
+    c, _ = client
+    resp = c.get("/api/decisions/evt_does_not_exist")
+    assert resp.status_code == 404
+
+
 def test_guardrails_lists_blocked_checks_not_allows(client) -> None:
     c, db_path = client
     _seed_one_allow_and_one_block(db_path)

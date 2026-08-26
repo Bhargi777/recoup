@@ -253,3 +253,19 @@ core/diagnose/llm_classifier.py, was not invoked in this run (no
 deterministic-mapper miss occurred to trigger its fallback path) and is
 covered instead by tests/test_diagnose_llm_classifier.py's injected-fake
 unit tests.
+
+---
+
+## 9. Every money action replayable from decision_id to a human-readable
+   explanation (addendum, 2026-08-26)
+
+This addendum postdates the original run above. `recoup replay
+<event_id_or_idempotency_key>` (and its dashboard counterpart, `GET
+/api/decisions/{event_id}`) now demonstrates this directly, not just via
+`recoup verify-chain` (whole-chain integrity) or the Decisions feed
+(browsable, not single-lookup). Real output, from a real `recoup run-batch`
+run against the full 600-record dataset — see README.md's Policy Engine
+section for the full transcript (11 `POLICY_GATE_EVALUATED` rows, one per
+guardrail check, plus the overall decision and its downstream event, all in
+sequence order with the same plain-English "why" the dashboard shows for
+the identical event).
