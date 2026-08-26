@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
 from core.api.deps import get_session
@@ -150,3 +150,14 @@ def replay_decision(session: Session, key: str) -> dict | None:
             for e, p in siblings
         ],
     }
+
+
+@router.get("/{event_id}")
+def get_decision_replay(event_id: str, session: Session = Depends(get_session)) -> dict:
+    """Dashboard click-through counterpart to `recoup replay` - same
+    underlying replay_decision(), exposed as a route so a Decisions-feed
+    card (already keyed by event_id) can link straight into this view."""
+    result = replay_decision(session, event_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"no decision found for {event_id!r}")
+    return result
