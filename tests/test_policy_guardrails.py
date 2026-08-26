@@ -7,6 +7,7 @@ import pytest
 from sqlmodel import Session
 
 from core.config import Settings
+from core.ingest.webhooks import PAYMENT_LINK_PAID, SUBSCRIPTION_CHARGED
 from core.ledger import append_event, get_engine, init_ledger_schema
 from core.policy import GateContext
 from core.policy.events import ACTION_EXECUTION_FAILED, INCENTIVE_COMMITTED, MONEY_ACTION_INTENT
@@ -18,6 +19,7 @@ from core.policy.guardrails import (
     check_idempotency,
     check_kill_switch,
     check_ledger_writable,
+    check_not_already_settled,
     check_npci_peak_hour,
     check_quiet_hours,
     check_rbi_pre_debit_notice,
@@ -452,4 +454,61 @@ def test_kill_switch_denies_when_active(session, playbooks, settings):
 def test_ledger_writable_allows_on_healthy_session(session, playbooks, settings):
     ctx = make_context()
     result = check_ledger_writable(session, ctx, playbooks["card_expired"], settings)
+    assert result.allowed
+
+
+# --- 11. Not already settled (recoup addition) ----------------------------------
+
+
+def test_not_already_settled_allows_when_no_settlement_event(session, playbooks, settings):
+    ctx = make_context()
+    result = check_not_already_settled(session, ctx, playbooks["card_expired"], settings)
+    assert result.allowed
+
+
+def test_not_already_settled_denies_on_direct_aggregate_id_match(session, playbooks, settings):
+    """SUBSCRIPTION_CHARGED (or any settlement event ledgered directly under
+    the record's own id) - no reference_id indirection needed."""
+    ctx = make_context(aggregate_id="pay_settled_direct")
+    append_event(session, "pay_settled_direct", SUBSCRIPTION_CHARGED, {"raw": {}})
+    result = check_not_already_settled(session, ctx, playbooks["card_expired"], settings)
+    assert not result.allowed
+    assert "SUBSCRIPTION_CHARGED" in result.reason
+
+
+def test_not_already_settled_denies_on_reference_id_match(session, playbooks, settings):
+    """The realistic payment_link.paid case: the webhook is ledgered under
+    Razorpay's own payment_link id as aggregate_id, correlated back to the
+    record via reference_id (see check_not_already_settled's docstring)."""
+    ctx = make_context(aggregate_id="pay_settled_ref")
+    append_event(
+        session,
+        "plink_real_razorpay_id",  # NOT ctx.aggregate_id - the real-world shape
+        PAYMENT_LINK_PAID,
+        {
+            "event_id": "evt_1",
+            "raw": {
+                "event": "payment_link.paid",
+                "payload": {
+                    "payment_link": {
+                        "entity": {
+                            "id": "plink_real_razorpay_id",
+                            "reference_id": "pay_settled_ref",
+                        }
+                    }
+                },
+            },
+        },
+    )
+    result = check_not_already_settled(session, ctx, playbooks["card_expired"], settings)
+    assert not result.allowed
+    assert "PAYMENT_LINK_PAID" in result.reason
+
+
+def test_not_already_settled_ignores_settlement_for_a_different_record(
+    session, playbooks, settings
+):
+    ctx = make_context(aggregate_id="pay_unsettled")
+    append_event(session, "pay_someone_else", SUBSCRIPTION_CHARGED, {"raw": {}})
+    result = check_not_already_settled(session, ctx, playbooks["card_expired"], settings)
     assert result.allowed

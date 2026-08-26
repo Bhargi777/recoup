@@ -100,6 +100,14 @@ EXPERIMENT_GROUP_ASSIGNED = "EXPERIMENT_GROUP_ASSIGNED"
 HOLDOUT_NO_INTERVENTION = "HOLDOUT_NO_INTERVENTION"
 SIMULATED_OUTCOME_RECORDED = "SIMULATED_OUTCOME_RECORDED"
 BATCH_RECORD_ABSTAINED = "BATCH_RECORD_ABSTAINED"
+# Emitted alongside the gate's own generic POLICY_GATE_DECISION (BLOCKED)
+# when the specific reason is core.policy.guardrails.check_not_already_settled
+# - same pattern as ACTION_EXECUTION_FAILED above: the gate's logging is
+# generic-by-check-name, this is the caller adding a distinctly-named event
+# for a noteworthy specific outcome, so "was this record skipped because it
+# was already paid" is answerable by event_type alone, not just by reading
+# a reason string.
+ACTION_SKIPPED_ALREADY_PAID = "ACTION_SKIPPED_ALREADY_PAID"
 
 
 @dataclass
@@ -313,6 +321,26 @@ def run_batch(
             for result in decision.results:
                 if not result.allowed:
                     blocked_reasons[result.check_name] += 1
+            settlement_result = next(
+                (
+                    r
+                    for r in decision.results
+                    if not r.allowed and r.check_name == "not_already_settled"
+                ),
+                None,
+            )
+            if settlement_result is not None:
+                append_event(
+                    session,
+                    record.id,
+                    ACTION_SKIPPED_ALREADY_PAID,
+                    {
+                        "idempotency_key": idempotency_key,
+                        "action_type": step.step,
+                        "root_cause": root_cause,
+                        "reason": settlement_result.reason,
+                    },
+                )
             continue
 
         try:

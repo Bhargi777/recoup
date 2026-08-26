@@ -3,7 +3,7 @@ English "why".
 
 The "why" is derived deterministically from the ``reason`` field the gate
 itself already wrote to the ledger (``core.policy.gate.evaluate_gate``'s
-``overall_reason`` - either "all 10 checks passed" or
+``overall_reason`` - either "all N checks passed" or
 "blocked by: <check names>"). Nothing here calls an LLM or invents new
 wording beyond formatting the same reason string for a human reader - per
 CLAUDE.md SS4, decision reasons are deterministic and auditable.
@@ -34,14 +34,17 @@ _CHECK_NAME_PLAIN_ENGLISH = {
     "npci_peak_hour_restriction": "the target time falls in an NPCI UPI AutoPay peak window",
     "kill_switch": "the emergency kill switch was ACTIVE",
     "pre_action_ledger_event": "the audit ledger was not reachable",
+    "not_already_settled": (
+        "this record already shows a PAYMENT_LINK_PAID/SUBSCRIPTION_CHARGED event"
+    ),
 }
 
 
 def _plain_english_why(status: str, reason: str) -> str:
     if status == "ALLOW":
         return (
-            "Allowed - all 10 policy gate checks passed (budget, attempts, cooldown, "
-            "quiet hours, RBI/NPCI, kill switch)."
+            "Allowed - all policy gate checks passed (budget, attempts, cooldown, "
+            "quiet hours, RBI/NPCI, kill switch, not-already-settled)."
         )
     # reason looks like "blocked by: check_a, check_b"
     failed = [c.strip() for c in reason.split("blocked by:", 1)[-1].split(",") if c.strip()]

@@ -58,7 +58,7 @@ def test_clean_action_is_allowed(session, settings):
     decision = evaluate_gate(session, make_context(), settings=settings)
     assert decision.allowed
     assert all(r.allowed for r in decision.results)
-    assert len(decision.results) == 10
+    assert len(decision.results) == 11  # 10 from SKILL.md + check_not_already_settled
 
 
 def test_denied_action_reports_reasons_without_swallowing_them(session, settings):
@@ -76,7 +76,7 @@ def test_every_check_and_the_overall_decision_are_logged(session, settings):
     events = list_events(session)
     evaluated = [e for e in events if e.event_type == POLICY_GATE_EVALUATED]
     decisions = [e for e in events if e.event_type == POLICY_GATE_DECISION]
-    assert len(evaluated) == 10
+    assert len(evaluated) == 11  # 10 from SKILL.md + check_not_already_settled
     assert len(decisions) == 1
 
 

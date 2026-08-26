@@ -545,9 +545,141 @@ def run_duplicate_callback_scenario(
     return report
 
 
+# --- 5. paid_during_flight ---------------------------------------------------
+
+
+def run_paid_during_flight_scenario(
+    session: Session, settings: Settings | None = None, n_records: int = DEFAULT_SMOKE_RECORD_COUNT
+) -> ChaosReport:
+    """A real gap a review surfaced: a payment_link.paid webhook can arrive
+    for a record BEFORE the next scheduled run_batch pass reaches it - a
+    genuine race between an async webhook and a batch job, not a contrived
+    input. Proves core.policy.guardrails.check_not_already_settled blocks
+    the record and core.eval.batch_runner emits ACTION_SKIPPED_ALREADY_PAID
+    - zero dispatch to a customer who already paid, closing the gap where
+    stopping_rules: [already_paid] was schema-validated (core/policy/
+    schema.py) but never runtime-enforced until this check."""
+    settings = settings or get_settings()
+    report = ChaosReport(scenario="paid_during_flight")
+
+    from core.experiment.holdout import TREATMENT, assign_group
+    from core.ingest.synthetic import generate_records
+
+    init_synthetic_schema(session.get_bind())
+    records = generate_records(seed=settings.split_seed)[:n_records]
+    candidate_ids = [r["id"] for r in records]
+    existing_ids = set(
+        session.exec(select(AtRiskRecord.id).where(AtRiskRecord.id.in_(candidate_ids)))
+    )
+    new_records = [AtRiskRecord(**r) for r in records if r["id"] not in existing_ids]
+    if new_records:
+        session.add_all(new_records)
+        session.commit()
+
+    # Pick a real treatment-arm record - the same assign_group() run_batch
+    # itself uses, so this is a genuine "would have been dispatched to"
+    # record, not one hand-picked to make the assertion trivially pass.
+    target = next(
+        r
+        for r in records
+        if assign_group(r["customer_id"], settings.default_holdout_percent, settings.split_seed)
+        == TREATMENT
+    )
+    target_id = target["id"]
+    report.add(
+        "seeded_real_record_in_treatment_arm",
+        True,
+        f"seeded {len(records)} real synthetic records; target={target_id} "
+        f"(customer_id={target['customer_id']}, deterministically assigned TREATMENT)",
+    )
+
+    # Baseline BEFORE the webhook - when this scenario shares a database with
+    # others (recoup chaos can run several --inject types back to back
+    # against the same file, and this module's own test suite does exactly
+    # that), an earlier scenario's own batch pass may have already dispatched
+    # to this same seeded record. That pre-existing history is not this
+    # scenario's concern; only a NEW dispatch AFTER the webhook would mean
+    # the guard failed.
+    existing_events = list_events(session)
+    baseline_seq = max((e.sequence_num for e in existing_events), default=-1)
+
+    # The webhook arrives BEFORE this record's next batch dispatch -
+    # reference_id is what a real Razorpay payment_link.paid webhook echoes
+    # back from execute_payment_link's own create_payment_link call (see
+    # check_not_already_settled's docstring in core/policy/guardrails.py).
+    body = json.dumps(
+        {
+            "event": "payment_link.paid",
+            "payload": {
+                "payment_link": {
+                    "entity": {"id": "plink_chaos_paid_001", "reference_id": target_id}
+                }
+            },
+        }
+    ).encode()
+    headers = {EVENT_ID_HEADER: "evt_chaos_paid_001"}
+    webhook_result = handle_webhook_event(session, body, headers)
+    report.add(
+        "payment_link_paid_webhook_recorded",
+        webhook_result["status"] == "recorded",
+        f"webhook status={webhook_result['status']!r}",
+    )
+
+    batch_report = run_batch(session, mode="dry_run", settings=settings)
+    report.add(
+        "batch_ran_cleanly_over_all_records",
+        batch_report.total_records == len(records),
+        f"{batch_report.total_records} records processed in the same pass",
+    )
+
+    new_events = [e for e in list_events(session) if e.sequence_num > baseline_seq]
+    target_events = [e for e in new_events if e.aggregate_id == target_id]
+    skip_events = [e for e in target_events if e.event_type == "ACTION_SKIPPED_ALREADY_PAID"]
+    report.add(
+        "exactly_one_action_skipped_already_paid_event",
+        len(skip_events) == 1,
+        f"ACTION_SKIPPED_ALREADY_PAID events for {target_id}: {len(skip_events)}",
+    )
+    if skip_events:
+        payload = json.loads(skip_events[0].payload_json)
+        reason_ok = "PAYMENT_LINK_PAID" in payload.get("reason", "")
+        idem_ok = bool(payload.get("idempotency_key"))
+        report.add(
+            "skip_event_carries_the_settlement_reason_and_idempotency_key",
+            reason_ok and idem_ok,
+            f"reason={payload.get('reason')!r}, idempotency_key={payload.get('idempotency_key')!r}",
+        )
+
+    dispatch_types = {
+        "ACTION_MESSAGE_DRAFTED",
+        "ACTION_SIMULATED_DRY_RUN",
+        "ACTION_PAYMENT_LINK_EXECUTED_LIVE",
+        "EXCEPTION_QUEUE_ENQUEUED",
+        "ACTION_MANDATE_RETRY_SCHEDULED",
+    }
+    dispatched = [e for e in target_events if e.event_type in dispatch_types]
+    report.add(
+        "zero_dispatch_to_the_already_paid_record",
+        len(dispatched) == 0,
+        f"executor events for {target_id} AFTER the webhook fired: "
+        f"{[e.event_type for e in dispatched]} (pre-existing dispatch events from an earlier "
+        "scenario sharing this database, if any, are out of scope - only new dispatch after "
+        "the settlement webhook would mean the guard failed)",
+    )
+
+    verification = verify_chain(session)
+    report.add(
+        "ledger_chain_still_valid",
+        verification.ok,
+        f"verify_chain: ok={verification.ok}, events_checked={verification.events_checked}",
+    )
+    return report
+
+
 INJECTION_TYPES = {
     "gateway_5xx": run_gateway_5xx_scenario,
     "rate_limit": run_rate_limit_scenario,
     "webhook_replay": run_webhook_replay_scenario,
     "duplicate_callback": run_duplicate_callback_scenario,
+    "paid_during_flight": run_paid_during_flight_scenario,
 }
