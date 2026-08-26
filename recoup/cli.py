@@ -4,6 +4,7 @@ import typer
 from sqlmodel import Session
 
 from core import __version__
+from core.api.decisions import replay_decision
 from core.chaos.scenarios import INJECTION_TYPES
 from core.config import get_settings
 from core.eval.batch_runner import run_batch
@@ -317,6 +318,41 @@ def chaos_command(
     typer.secho(report.as_text(), fg=typer.colors.GREEN if report.ok else typer.colors.RED)
     if not report.ok:
         raise typer.Exit(code=1)
+
+
+@app.command(name="replay")
+def replay_command(
+    key: str = typer.Argument(..., help="A decision's event_id or idempotency_key"),
+) -> None:
+    """Replay one policy-gate decision end to end: every sibling ledger event
+    sharing its idempotency_key, in sequence order, with the exact same
+    plain-English "why" the dashboard's Decisions feed shows for it -
+    core.api.decisions.replay_decision, reused here, not reimplemented.
+    """
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    init_ledger_schema(engine)
+
+    with Session(engine) as session:
+        result = replay_decision(session, key)
+
+    if result is None:
+        typer.secho(f"no matching decision found for {key!r}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    typer.secho(f"decision {result['event_id']}", fg=typer.colors.CYAN)
+    typer.echo(f"  idempotency_key : {result['idempotency_key']}")
+    typer.echo(f"  aggregate_id    : {result['aggregate_id']}")
+    typer.echo(f"  root_cause      : {result['root_cause']}")
+    typer.echo(f"  action_type     : {result['action_type']}")
+    typer.echo(f"  status          : {result['status']}")
+    typer.echo(f"  why             : {result['why']}")
+    typer.echo("  event history (sequence order):")
+    for event in result["events"]:
+        typer.echo(
+            f"    [{event['sequence_num']:>5}] {event['event_type']:<32} "
+            f"{event['timestamp_utc']}"
+        )
 
 
 if __name__ == "__main__":
