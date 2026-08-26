@@ -251,6 +251,50 @@ there is exactly one record of "an action was approved here", not a parallel tab
 Phase 5 itself does not execute anything — `evaluate_gate` only ever returns ALLOW/DENY;
 nothing in `core/policy` calls Razorpay or sends a message. Execution is Phase 6, below.
 
+**5. Explaining any one decision (`recoup replay`)** — every decision above is auditable
+in aggregate via `recoup verify-chain` and browsable via the dashboard's Decisions feed,
+but neither answers "walk me from this one `decision_id` to its explanation" directly.
+`recoup replay <event_id_or_idempotency_key>` does: it finds the matching
+`POLICY_GATE_DECISION` event, pulls every sibling event sharing its `idempotency_key`
+(every individual check, the overall decision, `MONEY_ACTION_INTENT` if ALLOWed, and
+whatever the executor layer recorded), and prints them in sequence order with the exact
+same plain-English "why" `core/api/decisions.py`'s Decisions feed already computes —
+reused directly, not reimplemented, so the two can never drift apart (checked explicitly
+in `tests/test_cli_replay.py`). `GET /api/decisions/{event_id}` exposes the identical
+function for dashboard click-through from a feed card. Real output, from a real
+`recoup run-batch` run against the full 600-record synthetic dataset:
+
+```
+$ recoup replay evt_012342374ec54da193f2b072fd029541
+decision evt_012342374ec54da193f2b072fd029541
+  idempotency_key : 188095448f339831bf09dbad2707dbbedb01038d13b87d4d5e61c17a67847115
+  aggregate_id    : synth_one_time_checkout_failure_0000
+  root_cause      : risk_blocked
+  action_type     : escalate_to_human
+  status          : ALLOW
+  why             : Allowed - all policy gate checks passed (budget, attempts, cooldown, quiet hours, RBI/NPCI, kill switch, not-already-settled).
+  event history (sequence order):
+    [  602] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.340819Z
+    [  603] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.364507Z
+    [  604] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.366596Z
+    [  605] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.368654Z
+    [  606] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.370536Z
+    [  607] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.372301Z
+    [  608] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.374035Z
+    [  609] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.376034Z
+    [  610] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.377881Z
+    [  611] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.382078Z
+    [  612] POLICY_GATE_EVALUATED            2026-08-26T06:47:50.386318Z
+    [  613] POLICY_GATE_DECISION             2026-08-26T06:47:50.387993Z
+    [  614] MONEY_ACTION_INTENT              2026-08-26T06:47:50.389544Z
+    [  615] EXCEPTION_QUEUE_ENQUEUED         2026-08-26T06:47:50.391081Z
+```
+
+The 11 `POLICY_GATE_EVALUATED` rows are the 11 checks above, individually logged; this
+record's ladder starts at `escalate_to_human` (the `risk_blocked` playbook's real first
+step, per its `intervention_ladder`), hence `EXCEPTION_QUEUE_ENQUEUED` rather than a
+drafted message.
+
 ## Execution + Experiment (Phase 6)
 
 Phase 6 adds the pieces downstream of the gate: **executors** that actually do something
