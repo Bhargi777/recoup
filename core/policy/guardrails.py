@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Session
 
 from core.config import Settings
+from core.ingest.webhooks import PAYMENT_LINK_PAID, SUBSCRIPTION_CHARGED
 from core.ledger import LedgerEvent, events_for_aggregate, list_events
 from core.policy.budget import committed_spend
 from core.policy.context import GateContext
@@ -423,7 +424,69 @@ def check_ledger_writable(
     )
 
 
-# Ordered to match the money-action-gate SKILL.md checklist numbering 1-10.
+# --- 11. Not already settled (recoup addition, beyond the original
+# money-action-gate SKILL.md checklist) ---------------------------------
+
+
+def _find_settlement_event(session: Session, record_id: str) -> LedgerEvent | None:
+    """A PAYMENT_LINK_PAID or SUBSCRIPTION_CHARGED event that settles this
+    record, if one exists in the ledger.
+
+    A payment_link.paid webhook is ledgered under the Razorpay payment_link's
+    OWN id as aggregate_id (core.ingest.webhooks._extract_aggregate_id), not
+    this record's id - so a direct events_for_aggregate(record_id) lookup
+    would never find it. Correlation is via ``reference_id``:
+    execute_payment_link's live path creates the link with
+    ``reference_id=context.aggregate_id`` (== record_id) -
+    core.ingest.razorpay_client.RazorpayClient.create_payment_link - and a
+    real Razorpay webhook echoes reference_id back on the entity. This scans
+    for either that reference_id match or (covering subscription.charged,
+    which this codebase has no subscription-creation path to set a
+    reference_id for) a direct aggregate_id == record_id match.
+
+    O(n) full-ledger scan, same pattern already used by
+    check_idempotency/check_cooldown above; fine at current data volumes,
+    revisit with an index if ledger size grows into the millions.
+    """
+    for event in list_events(session):
+        if event.event_type not in (PAYMENT_LINK_PAID, SUBSCRIPTION_CHARGED):
+            continue
+        if event.aggregate_id == record_id:
+            return event
+        payload = json.loads(event.payload_json)
+        raw = payload.get("raw", {})
+        link_entity = raw.get("payload", {}).get("payment_link", {}).get("entity", {})
+        if link_entity.get("reference_id") == record_id:
+            return event
+    return None
+
+
+def check_not_already_settled(
+    session: Session, context: GateContext, playbook: Playbook, settings: Settings
+) -> GateResult:
+    """Refuses any action against a record the ledger already shows as paid
+    or charged - closes the gap where ``stopping_rules: [already_paid]`` is
+    schema-validated (core/policy/schema.py) but was not, until this check,
+    enforced anywhere at runtime. See core/chaos/scenarios.py's
+    paid_during_flight scenario for the end-to-end proof."""
+    settlement = _find_settlement_event(session, context.aggregate_id)
+    if settlement is not None:
+        return GateResult(
+            "not_already_settled",
+            False,
+            f"{settlement.event_type} already recorded for this record "
+            f"(sequence_num {settlement.sequence_num}); refusing to act on a settled record",
+        )
+    return GateResult(
+        "not_already_settled", True, "no PAYMENT_LINK_PAID/SUBSCRIPTION_CHARGED event on record"
+    )
+
+
+# Ordered to match the money-action-gate SKILL.md checklist numbering 1-10,
+# plus #11 (check_not_already_settled) - a recoup addition beyond the
+# original SKILL.md checklist, added after a review found stopping_rules
+# was schema-validated but not runtime-enforced. See README's "Guardrails"
+# section for the same disclosure.
 ALL_CHECKS = (
     check_idempotency,
     check_global_budget,
@@ -435,4 +498,5 @@ ALL_CHECKS = (
     check_npci_peak_hour,
     check_kill_switch,
     check_ledger_writable,
+    check_not_already_settled,
 )

@@ -5,8 +5,10 @@ whether a money action may proceed. It never calls Razorpay or any executor -
 core/policy owns gating, not execution (core/act/ does not exist yet). No LLM
 is involved anywhere in this module or anything it imports (CLAUDE.md SS4).
 
-Evaluation is exhaustive, not short-circuiting: all 10 checks always run and
-every individual result - pass or fail - is written to the ledger, plus one
+Evaluation is exhaustive, not short-circuiting: all 11 checks (the original
+10 from money-action-gate SKILL.md, plus check_not_already_settled - a
+recoup addition, see core/policy/guardrails.py) always run and every
+individual result - pass or fail - is written to the ledger, plus one
 overall POLICY_GATE_DECISION event. This is a deliberate choice over
 short-circuiting: money-action-gate SKILL.md is explicit that "every gate
 decision - allow AND deny - goes to the ledger with a reason string" for
@@ -92,7 +94,9 @@ def evaluate_gate(
     overall_allowed = all(result.allowed for result in results)
     failed = [r.check_name for r in results if not r.allowed]
     overall_reason = (
-        "all 10 checks passed" if overall_allowed else f"blocked by: {', '.join(failed)}"
+        f"all {len(results)} checks passed"
+        if overall_allowed
+        else f"blocked by: {', '.join(failed)}"
     )
 
     append_event(

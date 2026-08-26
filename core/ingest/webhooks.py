@@ -23,13 +23,18 @@ from core.ledger import append_event, list_events
 SIGNATURE_HEADER = "x-razorpay-signature"
 EVENT_ID_HEADER = "x-razorpay-event-id"
 
+PAYMENT_FAILED = "PAYMENT_FAILED"
+PAYMENT_LINK_PAID = "PAYMENT_LINK_PAID"
+SUBSCRIPTION_CHARGED = "SUBSCRIPTION_CHARGED"
+SUBSCRIPTION_HALTED = "SUBSCRIPTION_HALTED"
+
 # Events this phase records into the ledger. Action-taking on these events is
 # the executor layer's job (core/act, Phase 6) - Phase 2 only ingests and logs.
 KNOWN_EVENTS = {
-    "payment.failed": "PAYMENT_FAILED",
-    "payment_link.paid": "PAYMENT_LINK_PAID",
-    "subscription.charged": "SUBSCRIPTION_CHARGED",
-    "subscription.halted": "SUBSCRIPTION_HALTED",
+    "payment.failed": PAYMENT_FAILED,
+    "payment_link.paid": PAYMENT_LINK_PAID,
+    "subscription.charged": SUBSCRIPTION_CHARGED,
+    "subscription.halted": SUBSCRIPTION_HALTED,
 }
 
 
