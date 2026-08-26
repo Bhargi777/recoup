@@ -14,6 +14,7 @@ from sqlmodel import Session
 from core.chaos.scenarios import (
     run_duplicate_callback_scenario,
     run_gateway_5xx_scenario,
+    run_paid_during_flight_scenario,
     run_rate_limit_scenario,
     run_webhook_replay_scenario,
 )
@@ -79,7 +80,23 @@ def test_duplicate_callback_cannot_produce_a_second_payment_link(session: Sessio
     assert by_name["exactly_one_money_action_intent_for_this_idempotency_key"].passed
 
 
-def test_all_four_scenarios_share_one_database_without_seed_collision(session: Session) -> None:
+def test_paid_during_flight_skips_dispatch_to_an_already_paid_record(session: Session) -> None:
+    """A real gap a review surfaced: a payment_link.paid webhook arriving
+    before the next run_batch pass must stop that record from being
+    re-contacted. Checked via literal ledger event counts (exactly one
+    ACTION_SKIPPED_ALREADY_PAID, zero executor-dispatch events for that
+    record), not an assumption - and against a real deterministically-
+    selected TREATMENT-arm record, not a hand-picked trivial case."""
+    report = run_paid_during_flight_scenario(session)
+    assert report.ok, _all_passed(report)
+
+    by_name = {c.name: c for c in report.checks}
+    assert by_name["exactly_one_action_skipped_already_paid_event"].passed
+    assert by_name["skip_event_carries_the_settlement_reason_and_idempotency_key"].passed
+    assert by_name["zero_dispatch_to_the_already_paid_record"].passed
+
+
+def test_all_five_scenarios_share_one_database_without_seed_collision(session: Session) -> None:
     """recoup chaos can run multiple injection types back to back against the
     same database (proven here in-process); smoke-seeding must be
     idempotent across them - this is the real gap that was found and fixed
@@ -89,6 +106,7 @@ def test_all_four_scenarios_share_one_database_without_seed_collision(session: S
         run_rate_limit_scenario(session),
         run_webhook_replay_scenario(session),
         run_duplicate_callback_scenario(session),
+        run_paid_during_flight_scenario(session),
     ]
     for report in reports:
         assert report.ok, _all_passed(report)
