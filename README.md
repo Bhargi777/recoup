@@ -30,7 +30,7 @@ What makes this different from a retry cron job:
 | Deterministic holdout split | REAL | Pure hash of `(customer_id, seed)`, reproducible byte-for-byte on any rerun. |
 | Wilson confidence interval | REAL | Verified against a hand-computable textbook reference case. |
 | Diagnosis on a held-out set | REAL | 200 real held-out records, real measured macro F1 = 1.0000. |
-| Live Razorpay payment execution | SIMULATED | No `rzp_test_` credentials in this environment (Phase 2's disclosed gap). The `--live` path is real, unmodified code — just not exercised end to end here. |
+| Live Razorpay payment execution | REAL | `scripts/live_proof.py` created a real Test Mode payment link against `api.razorpay.com/v1` — `plink_TUlPPZlrWjhQ72`, 2026-08-27. Doing so found and fixed a real bug the mocked test suite couldn't catch — see Phase 2 below. |
 | Live LLM diagnosis call | SIMULATED (unexercised) | No `ANTHROPIC_API_KEY` configured. The fallback path is real and tested with an injected fake classifier, never called for real here. |
 | Customer recovery behavior / uplift | SIMULATED | No real customer payment behavior to observe. `core.experiment.simulated_outcome` is an explicitly labeled illustrative model, not observed outcomes. |
 
@@ -164,13 +164,30 @@ and retry-safe before anything downstream could depend on it.
   delivery is a ledger no-op and can never re-trigger a downstream action. Covers
   `payment.failed`, `payment_link.paid`, `subscription.charged`, `subscription.halted`.
 
-**Honest status — live proof not yet done.** Everything above is unit-tested against
-`httpx.MockTransport` (no network call made) — see `tests/test_ingest_*.py`. CLAUDE.md's
-Phase 2 exit bar additionally requires creating a real Test Mode payment link and paying
-it against `api.razorpay.com/v1` with real `rzp_test_` credentials. This environment does
-not have Razorpay test-mode credentials, so that live proof has not been run and this PR
-does not claim it has. Running it (and recording the `payment_id` as evidence per the
-razorpay-testmode skill) is tracked as follow-up work once credentials are available.
+**Honest status — live proof done, and it found a real bug mocks missed.** Everything
+above is also unit-tested against `httpx.MockTransport` (no network call made) — see
+`tests/test_ingest_*.py`. CLAUDE.md's Phase 2 exit bar additionally requires creating a
+real Test Mode payment link against `api.razorpay.com/v1` with real `rzp_test_`
+credentials, not a mocked one. `scripts/live_proof.py` does exactly this, using the same
+unmodified `RazorpayClient` the rest of the app calls.
+
+Running it for real surfaced a genuine bug: `create_payment_link(customer=None)` was
+sending `"customer": {}` in the request body. `httpx.MockTransport` happily accepted
+that in every one of the 283 mocked tests, because a mock only replays what you told it
+to accept — it can't enforce Razorpay's own field validation. The real API rejected it
+outright (`BAD_REQUEST_ERROR: faulty key: customer`), and `core/act/executors.py`'s
+`payment_link` executor calls `create_payment_link` with no `customer` argument, so the
+`--live` path was genuinely broken until this was found. This is exactly why the live
+proof mattered, not a formality: it caught something the mocked suite structurally could
+not. Fixed by omitting the `customer` key entirely when none is supplied, with a new
+regression test that asserts on the constructed payload shape (no `customer` key when
+absent, a well-formed one when provided) rather than only on the mocked call succeeding
+— see `tests/test_ingest_razorpay_client.py`.
+
+Real evidence: a real Test Mode payment link was created against the real API —
+`plink_TUlPPZlrWjhQ72` (`https://rzp.io/rzp/Y0SelnB`), 2026-08-27. See `scripts/README.md`
+for the exact steps to reproduce this, including receiving a real signed webhook via
+ngrok, if you want to verify the full round trip yourself.
 
 ## Synthetic data (Phase 3)
 
