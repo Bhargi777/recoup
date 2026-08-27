@@ -103,7 +103,10 @@ def _macro_prf1(
 
 
 def evaluate_holdout(
-    session: Session, records: list[AtRiskRecord] | None = None, classify_fn=None
+    session: Session,
+    records: list[AtRiskRecord] | None = None,
+    classify_fn=None,
+    persist: bool = False,
 ) -> DiagnosisEvalReport:
     """Run diagnose() on every held-out record and score against true_root_cause.
 
@@ -111,6 +114,13 @@ def evaluate_holdout(
     ``classify_fn`` is forwarded to ``diagnose()`` (defaults to the real LLM
     path, which will honestly ABSTAIN in an environment with no
     ANTHROPIC_API_KEY rather than fabricate a result).
+
+    ``persist`` defaults to ``False``: this is scoring known-label held-out
+    records against a prediction, not a real diagnosis decision, and it is
+    re-run on every metrics read (``core.api.metrics``) and every
+    `recoup eval-diagnosis` invocation - it must not grow the audit ledger
+    each time someone reads a metric. Pass ``persist=True`` only if a caller
+    genuinely wants held-out predictions journaled as real events.
     """
     if records is None:
         records = load_holdout_records(session)
@@ -124,7 +134,7 @@ def evaluate_holdout(
         true_label = record.true_root_cause
         labels.add(true_label)
 
-        result = diagnose(session, record, classify_fn=classify_fn)
+        result = diagnose(session, record, classify_fn=classify_fn, persist=persist)
         coverage[result.method] = coverage.get(result.method, 0) + 1
 
         pred_label = result.predicted_root_cause if result.predicted_root_cause else ABSTAIN_LABEL

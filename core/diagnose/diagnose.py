@@ -54,8 +54,16 @@ def diagnose(
     session: Session,
     record: DiagnosableRecord,
     classify_fn: ClassifyFn | None = None,
+    persist: bool = True,
 ) -> DiagnosisResult:
     """Diagnose one record's root cause and emit exactly one ledger event.
+
+    ``persist=False`` skips the ledger append and just returns the result -
+    for held-out evaluation (``core.eval.diagnosis_eval.evaluate_holdout``),
+    which scores predictions against already-known labels and is re-run on
+    every metrics read; that is measurement, not a real diagnosis decision,
+    and must not grow the audit chain. Real diagnosis of records under
+    active processing (``core.eval.batch_runner.run_batch``) always persists.
 
     Order of resolution:
       1. Deterministic mapper (cohort rule, then error-reason lookup). This
@@ -78,16 +86,17 @@ def diagnose(
     """
     root_cause = deterministic_diagnose(record.cohort, record.error_code, record.error_reason)
     if root_cause is not None:
-        append_event(
-            session,
-            record.id,
-            DIAGNOSIS_COMPLETED,
-            {
-                "predicted_root_cause": root_cause,
-                "method": METHOD_DETERMINISTIC,
-                "confidence": None,
-            },
-        )
+        if persist:
+            append_event(
+                session,
+                record.id,
+                DIAGNOSIS_COMPLETED,
+                {
+                    "predicted_root_cause": root_cause,
+                    "method": METHOD_DETERMINISTIC,
+                    "confidence": None,
+                },
+            )
         return DiagnosisResult(
             record_id=record.id,
             predicted_root_cause=root_cause,
@@ -97,17 +106,18 @@ def diagnose(
 
     free_text = getattr(record, "notes", None)
     if not free_text:
-        append_event(
-            session,
-            record.id,
-            DIAGNOSIS_ABSTAINED,
-            {
-                "predicted_root_cause": None,
-                "method": METHOD_ABSTAIN,
-                "confidence": None,
-                "reason": "no_deterministic_match_no_free_text",
-            },
-        )
+        if persist:
+            append_event(
+                session,
+                record.id,
+                DIAGNOSIS_ABSTAINED,
+                {
+                    "predicted_root_cause": None,
+                    "method": METHOD_ABSTAIN,
+                    "confidence": None,
+                    "reason": "no_deterministic_match_no_free_text",
+                },
+            )
         return DiagnosisResult(
             record_id=record.id, predicted_root_cause=None, method=METHOD_ABSTAIN, confidence=None
         )
@@ -116,33 +126,35 @@ def diagnose(
     try:
         result: ClassificationResult = active_classify_fn(free_text)
     except LLMUnavailableError:
-        append_event(
-            session,
-            record.id,
-            DIAGNOSIS_ABSTAINED,
-            {
-                "predicted_root_cause": None,
-                "method": METHOD_ABSTAIN,
-                "confidence": None,
-                "reason": "llm_unavailable",
-            },
-        )
+        if persist:
+            append_event(
+                session,
+                record.id,
+                DIAGNOSIS_ABSTAINED,
+                {
+                    "predicted_root_cause": None,
+                    "method": METHOD_ABSTAIN,
+                    "confidence": None,
+                    "reason": "llm_unavailable",
+                },
+            )
         return DiagnosisResult(
             record_id=record.id, predicted_root_cause=None, method=METHOD_ABSTAIN, confidence=None
         )
 
     if result.abstained:
-        append_event(
-            session,
-            record.id,
-            DIAGNOSIS_ABSTAINED,
-            {
-                "predicted_root_cause": None,
-                "method": METHOD_ABSTAIN,
-                "confidence": result.confidence,
-                "reason": "llm_confidence_below_threshold",
-            },
-        )
+        if persist:
+            append_event(
+                session,
+                record.id,
+                DIAGNOSIS_ABSTAINED,
+                {
+                    "predicted_root_cause": None,
+                    "method": METHOD_ABSTAIN,
+                    "confidence": result.confidence,
+                    "reason": "llm_confidence_below_threshold",
+                },
+            )
         return DiagnosisResult(
             record_id=record.id,
             predicted_root_cause=None,
@@ -150,16 +162,17 @@ def diagnose(
             confidence=result.confidence,
         )
 
-    append_event(
-        session,
-        record.id,
-        DIAGNOSIS_COMPLETED,
-        {
-            "predicted_root_cause": result.predicted_root_cause,
-            "method": METHOD_LLM,
-            "confidence": result.confidence,
-        },
-    )
+    if persist:
+        append_event(
+            session,
+            record.id,
+            DIAGNOSIS_COMPLETED,
+            {
+                "predicted_root_cause": result.predicted_root_cause,
+                "method": METHOD_LLM,
+                "confidence": result.confidence,
+            },
+        )
     return DiagnosisResult(
         record_id=record.id,
         predicted_root_cause=result.predicted_root_cause,
