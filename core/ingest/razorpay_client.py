@@ -127,19 +127,22 @@ class RazorpayClient:
         customer: dict[str, str] | None = None,
         attempt_num: int = 0,
     ) -> dict[str, Any]:
+        json_body: dict[str, Any] = {
+            "amount": amount_paise,
+            "currency": currency,
+            "description": description,
+            "reference_id": reference_id,
+        }
+        if customer:
+            json_body["customer"] = customer
+
         return self._dispatch_idempotent(
             action_type="create_payment_link",
             entity_id=reference_id,
             attempt_num=attempt_num,
             method="POST",
             path="/payment_links",
-            json_body={
-                "amount": amount_paise,
-                "currency": currency,
-                "description": description,
-                "reference_id": reference_id,
-                "customer": customer or {},
-            },
+            json_body=json_body,
         )
 
     # -- read-only calls (always dispatched, always logged) -----------------

@@ -204,3 +204,37 @@ def test_payload_stored_in_ledger_is_canonical_json(session: Session) -> None:
     intent = next(e for e in list_events(session) if e.event_type == "RAZORPAY_CREATE_ORDER_INTENT")
     parsed = json.loads(intent.payload_json)
     assert parsed["request"]["receipt"] == "invoice_json"
+
+
+def test_payment_link_omits_customer_key_when_not_provided(session: Session) -> None:
+    """Regression test for a real bug: sending "customer": {} (rather than
+    omitting the key) is rejected by Razorpay's live API with
+    BAD_REQUEST_ERROR "faulty key: customer" - a validation MockTransport
+    never enforces, so the mocked test suite passed while the real path was
+    broken. Discovered via scripts/live_proof.py against the real API."""
+    captured_bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "plink_no_customer"})
+
+    with _client(session, handler) as client:
+        client.create_payment_link(5000, "INR", "recover invoice", "invoice_no_customer")
+
+    assert "customer" not in captured_bodies[0]
+
+
+def test_payment_link_includes_well_formed_customer_when_provided(session: Session) -> None:
+    captured_bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "plink_with_customer"})
+
+    customer = {"name": "Jane Doe", "email": "jane@example.com"}
+    with _client(session, handler) as client:
+        client.create_payment_link(
+            5000, "INR", "recover invoice", "invoice_with_customer", customer=customer
+        )
+
+    assert captured_bodies[0]["customer"] == customer
