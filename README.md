@@ -30,7 +30,7 @@ What makes this different from a retry cron job:
 | Deterministic holdout split | REAL | Pure hash of `(customer_id, seed)`, reproducible byte-for-byte on any rerun. |
 | Wilson confidence interval | REAL | Verified against a hand-computable textbook reference case. |
 | Diagnosis on a held-out set | REAL | 200 real held-out records, real measured macro F1 = 1.0000. |
-| Live Razorpay payment execution | REAL | `scripts/live_proof.py` created a real Test Mode payment link against `api.razorpay.com/v1` — `plink_TUlPPZlrWjhQ72`, 2026-08-27. Doing so found and fixed a real bug the mocked test suite couldn't catch — see Phase 2 below. |
+| Live Razorpay payment execution | REAL | `scripts/live_proof.py` created a real Test Mode payment link against `api.razorpay.com/v1` — `plink_TUlPPZlrWjhQ72`, paid and captured as `pay_TUtLtR3Aijs5D5`, 2026-08-27. Doing so found and fixed a real bug the mocked test suite couldn't catch — see Phase 2 below. |
 | Live LLM diagnosis call | SIMULATED (unexercised) | No `ANTHROPIC_API_KEY` configured. The fallback path is real and tested with an injected fake classifier, never called for real here. |
 | Customer recovery behavior / uplift | SIMULATED | No real customer payment behavior to observe. `core.experiment.simulated_outcome` is an explicitly labeled illustrative model, not observed outcomes. |
 
@@ -185,9 +185,10 @@ absent, a well-formed one when provided) rather than only on the mocked call suc
 — see `tests/test_ingest_razorpay_client.py`.
 
 Real evidence: a real Test Mode payment link was created against the real API —
-`plink_TUlPPZlrWjhQ72` (`https://rzp.io/rzp/Y0SelnB`), 2026-08-27. See `scripts/README.md`
-for the exact steps to reproduce this, including receiving a real signed webhook via
-ngrok, if you want to verify the full round trip yourself.
+`plink_TUlPPZlrWjhQ72` (`https://rzp.io/rzp/Y0SelnB`) — then paid and captured in test
+mode as `pay_TUtLtR3Aijs5D5`, 2026-08-27: the full round trip, not just link creation.
+See `scripts/README.md` for the exact steps to reproduce this, including receiving a
+real signed webhook via ngrok, if you want to verify it yourself.
 
 ## Synthetic data (Phase 3)
 
