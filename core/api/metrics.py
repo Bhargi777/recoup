@@ -11,12 +11,18 @@ Three real computations, never fabricated or cached-as-if-static:
      observed Razorpay payments - see that module's docstring.
   3. An exception list: every ABSTAIN diagnosis
      (``DIAGNOSIS_ABSTAINED`` ledger events) and every
-     ``EXCEPTION_QUEUE_ENQUEUED`` event, each with its real reason.
+     ``EXCEPTION_QUEUE_ENQUEUED`` event this computation produced.
 
-Calling this endpoint runs the real pipeline (same as `recoup eval-diagnosis`
-/ `recoup run-batch --dry-run`) and therefore appends real ledger events on
-every call, exactly like those CLI commands do - this is a deliberate
-zero-fabrication choice over faking a cached number.
+Reading a metric must not mutate the audit ledger. Both computations above
+run against a throwaway, in-memory copy of the synthetic dataset
+(``_scratch_session_with_records``) rather than the real session - real
+diagnosis/policy/executor code is called unmodified and unweakened (nothing
+here skips or fakes the ledger-write invariants CLAUDE.md requires for a real
+money-action run; the SCRATCH ledger gets every event a real
+``recoup run-batch`` would write), it is simply a disposable copy that is
+discarded at the end of the request instead of the production ledger. A real
+`recoup run-batch` / `recoup eval-diagnosis` CLI invocation against the real
+ledger is unaffected and keeps writing real, durable events as before.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from core.act.executors import EXCEPTION_QUEUE_ENQUEUED
 from core.api.deps import get_session
@@ -32,10 +38,27 @@ from core.config import get_settings
 from core.diagnose.diagnose import DIAGNOSIS_ABSTAINED
 from core.eval.batch_runner import run_batch
 from core.eval.diagnosis_eval import evaluate_holdout
-from core.ingest.synthetic import init_synthetic_schema, run_generation
-from core.ledger import list_events
+from core.ingest.synthetic import AtRiskRecord, init_synthetic_schema, run_generation
+from core.ledger import get_engine, init_ledger_schema, list_events
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
+
+
+def _scratch_session_with_records(real_session: Session) -> Session:
+    """A throwaway in-memory ledger + a copy of the real synthetic records,
+    so ``run_batch`` can compute a real report without writing a single
+    event to the real, durable ledger. Never committed back; the caller
+    discards it at the end of the request."""
+    scratch_engine = get_engine("sqlite:///:memory:")
+    init_ledger_schema(scratch_engine)
+    init_synthetic_schema(scratch_engine)
+    scratch_session = Session(scratch_engine)
+
+    records = real_session.exec(select(AtRiskRecord)).all()
+    for record in records:
+        scratch_session.add(AtRiskRecord(**record.model_dump()))
+    scratch_session.commit()
+    return scratch_session
 
 
 @router.get("")
@@ -45,10 +68,12 @@ def get_metrics(session: Session = Depends(get_session)) -> dict:
     run_generation(session, seed=settings.split_seed, force=False)
 
     diagnosis_report = evaluate_holdout(session)
-    batch_report = run_batch(session, mode="dry_run", settings=settings)
+
+    scratch_session = _scratch_session_with_records(session)
+    batch_report = run_batch(scratch_session, mode="dry_run", settings=settings)
 
     exceptions = []
-    for event in list_events(session):
+    for event in list_events(scratch_session):
         if event.event_type == DIAGNOSIS_ABSTAINED:
             payload = json.loads(event.payload_json)
             exceptions.append(
@@ -75,6 +100,7 @@ def get_metrics(session: Session = Depends(get_session)) -> dict:
                 }
             )
     exceptions.sort(key=lambda e: e["sequence_num"], reverse=True)
+    scratch_session.close()
 
     return {
         "diagnosis": diagnosis_report.as_dict(),
