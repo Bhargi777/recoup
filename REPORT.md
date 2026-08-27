@@ -31,7 +31,7 @@ every time, per `.claude/skills/honest-metrics/SKILL.md`.
 | Metric | Value |
 |---|---|
 | Records processed | 600 |
-| Elapsed wall time | 55.53s (`run-batch (dry_run) complete in 55.53s`) |
+| Elapsed wall time | 55.53s (`run-batch (dry_run) complete in 55.53s`) — one representative run; varies roughly 50-56s run to run on this machine |
 | Diagnosis abstained | 0 |
 | Treatment / control split | 516 / 84 (actual control % = 14.00, target 15%) |
 | Blocked by gate | 0 (first pass — see section 4 for a non-empty run) |

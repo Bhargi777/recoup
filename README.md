@@ -319,15 +319,18 @@ out-of-range ceiling fails loudly (`PlaybookLoadError`), never silently no-ops.
 `core/policy/loader.py`'s `validate_taxonomy_completeness` asserts a 1:1 mapping between
 playbooks and taxonomy labels in both directions.
 
-**Honest disclosure — not every `stopping_rules` entry is runtime-enforced yet.** Every
-playbook's `stopping_rules` list is schema-validated (each entry must be a known string),
-but only `already_paid` is actually checked at runtime today, via check #11 below.
-`max_attempts_reached` and `customer_opted_out` are validated as well-formed YAML and
-nothing more — no code path currently consults them to stop an intervention ladder. This
-was found in a self-review before it was found by a judge; closing `already_paid` (the
-sharpest of the three — a paid customer could otherwise be re-contacted) was scoped and
-shipped as check #11 below. The other two remain open, disclosed here rather than implied
-to be handled by the schema validation alone.
+**Honest disclosure — the `stopping_rules` YAML field itself is unread; enforcement
+happens elsewhere.** Every playbook's `stopping_rules` list is schema-validated (each
+entry must be a known string), but no code path reads that list at runtime — it's
+decorative today. That does **not** mean the two named conditions go unenforced:
+`already_paid` is enforced unconditionally by check #11 (`check_not_already_settled`),
+and attempt-capping is enforced unconditionally by check #4 (`check_attempt_limits`,
+which refuses any action once `prior_attempts >= playbook.max_attempts`, replayed from
+the ledger's `MONEY_ACTION_INTENT` events, on every run, for every playbook). Neither
+enforcement path consults `stopping_rules` to do its job — both would behave identically
+if the field were deleted. The one genuinely open gap is `customer_opted_out`: no
+opt-out signal exists anywhere in the data model, webhooks, or ledger today, so there is
+nothing for a check to consult even in principle. That gap is disclosed, not closed.
 
 **2. The 11 guardrail checks (`core/policy/guardrails.py`)** — the 10 checks from
 [`.claude/skills/money-action-gate/SKILL.md`](.claude/skills/money-action-gate/SKILL.md)
@@ -490,6 +493,9 @@ the same failure mode Phase 2's PR already established, not fabricated here.
 
 Run on this branch against a fresh database, `recoup run-batch` (`--dry-run`, the
 default):
+
+Wall time is one representative run and varies run to run (roughly 50-56s observed on
+this machine); the record counts and gate outcomes below it do not.
 
 ```
 run-batch (dry_run) complete in 51.94s
