@@ -29,9 +29,36 @@ class UpliftReport:
     control: WilsonInterval
 
     @property
-    def uplift(self) -> float:
+    def is_computable(self) -> bool:
+        """False when either arm has zero observations this run (e.g. every
+        treatment record was correctly blocked by the gate on a repeat
+        run). A 0.0000 point estimate on n=0 is not a measured rate - it is
+        the absence of data, and honest-metrics SKILL.md requires callers
+        say so rather than do arithmetic on an empty arm."""
+        return self.treatment.n > 0 and self.control.n > 0
+
+    @property
+    def not_computable_reason(self) -> str | None:
+        if self.is_computable:
+            return None
+        empty_arms = [
+            arm
+            for arm, interval in (("treatment", self.treatment), ("control", self.control))
+            if interval.n == 0
+        ]
+        return (
+            f"uplift not computable: {' and '.join(empty_arms)} n=0 this run "
+            "(no outcomes observed in that arm - e.g. every record was blocked "
+            "by the gate, not that recovery failed)"
+        )
+
+    @property
+    def uplift(self) -> float | None:
         """Treatment recovery rate minus control recovery rate (percentage
-        points, as a fraction e.g. 0.08 == +8pp)."""
+        points, as a fraction e.g. 0.08 == +8pp). ``None`` when not
+        computable - see ``is_computable`` / ``not_computable_reason``."""
+        if not self.is_computable:
+            return None
         return self.treatment.point_estimate - self.control.point_estimate
 
     def as_dict(self) -> dict:
@@ -39,6 +66,8 @@ class UpliftReport:
             "treatment": self.treatment.as_dict(),
             "control": self.control.as_dict(),
             "uplift": self.uplift,
+            "uplift_computable": self.is_computable,
+            "uplift_not_computable_reason": self.not_computable_reason,
         }
 
 

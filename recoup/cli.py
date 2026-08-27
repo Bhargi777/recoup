@@ -275,7 +275,13 @@ def run_batch_command(
         f"  [SIMULATED] control recovery rate  : {u.control.point_estimate:.4f} "
         f"(95% Wilson CI {u.control.lower:.4f}-{u.control.upper:.4f}, n={u.control.n})"
     )
-    typer.echo(f"  [SIMULATED] uplift (treatment - control): {u.uplift:+.4f}")
+    if u.is_computable:
+        typer.echo(f"  [SIMULATED] uplift (treatment - control): {u.uplift:+.4f}")
+    else:
+        typer.secho(
+            f"  [SIMULATED] uplift: {u.not_computable_reason}",
+            fg=typer.colors.YELLOW,
+        )
 
 
 @app.command(name="chaos")

@@ -25,7 +25,9 @@ interface UpliftBlock {
   qualifier: string
   treatment: WilsonInterval
   control: WilsonInterval
-  uplift: number
+  uplift: number | null
+  uplift_computable: boolean
+  uplift_not_computable_reason: string | null
 }
 
 interface BatchRun {
@@ -115,8 +117,16 @@ export function Metrics() {
             <MetricStat label="Abstain rate" value={pct(data.diagnosis.abstain_rate)} sub="routed to human queue" />
             <MetricStat
               label="[SIMULATED] uplift"
-              value={`${data.uplift.uplift >= 0 ? '+' : ''}${pct(data.uplift.uplift)}`}
-              sub={`treatment n=${data.uplift.treatment.n}, control n=${data.uplift.control.n}`}
+              value={
+                data.uplift.uplift_computable
+                  ? `${data.uplift.uplift! >= 0 ? '+' : ''}${pct(data.uplift.uplift!)}`
+                  : 'n/a'
+              }
+              sub={
+                data.uplift.uplift_computable
+                  ? `treatment n=${data.uplift.treatment.n}, control n=${data.uplift.control.n}`
+                  : data.uplift.uplift_not_computable_reason ?? 'not computable'
+              }
             />
             <MetricStat label="Open exceptions" value={String(data.exceptions.total)} sub="ABSTAIN + escalated" />
           </div>
