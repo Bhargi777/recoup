@@ -226,6 +226,17 @@ recoup generate-synthetic-data          # generate + persist 600 records, one le
 recoup generate-synthetic-data --force  # wipe and regenerate instead of skipping
 ```
 
+**`--force` is records-only, by design — it does not give you a clean-slate ledger.**
+Synthetic record IDs are deterministic (same seed every generation), so on a database
+that has already run a batch, `--force` regenerates the same IDs against a ledger that
+still remembers them: `check_idempotency` sees prior `MONEY_ACTION_INTENT` events for
+those same IDs and blocks every treatment record on the next `run-batch`, even though
+nothing was actually re-approved. This is not a bug in `--force` — the ledger is
+append-only by design (`core/ledger/store.py`: "no update or delete path exists here")
+and `--force`'s own docstring only ever promised to touch records. For a genuine
+clean-slate demo run, use `recoup reset` instead (below), which explicitly drops and
+recreates both tables.
+
 ## Diagnosis (Phase 4)
 
 **What it is:** turns a failure into a root cause, deterministically first, LLM only as a
@@ -483,7 +494,16 @@ intervals into an `UpliftReport`.
 ```bash
 recoup run-batch            # --dry-run is the default: full pipeline, nothing external called
 recoup run-batch --live     # real RazorpayClient calls for payment_link (will fail auth here)
+recoup reset --yes          # genuine clean slate before a first pass - see below
 ```
+
+**To reproduce a real, populated treatment arm (not the second-pass block demo), start
+from `recoup reset`, not `generate-synthetic-data --force`.** `--force` only wipes
+synthetic records, not the ledger (see Phase 3 above); on a database that has already
+run a batch, that leaves every treatment record's idempotency key already seen, so
+`run-batch` immediately blocks all of them instead of producing pass one's real uplift
+number. `recoup reset` (confirmation-gated unless `--yes`) drops and recreates both
+tables — the only supported way back to a state with no prior history to replay.
 
 For every one of the 600 synthetic records: `diagnose()` → `assign_group()` → if
 **control**: log `HOLDOUT_NO_INTERVENTION` + a simulated outcome, **stop — no gate, no
@@ -757,9 +777,14 @@ recoup chaos --inject duplicate_callback
 recoup chaos --inject paid_during_flight
 recoup verify-chain                 # whole-chain hash integrity
 
-pytest -q                           # 283 tests
+pytest -q                           # 295 tests
 ruff check core recoup tests        # clean
 ```
 
 REPORT.md has the full real-run numbers this README's examples are drawn from, with
 timestamps and command sequence.
+
+Re-running this sequence a second time against the *same* database? Run `recoup reset
+--yes` first, not `generate-synthetic-data --force` — see "The batch orchestrator" above
+for why `--force` alone won't give pass one a populated treatment arm on a reused
+database.

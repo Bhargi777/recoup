@@ -10,8 +10,9 @@ from core.config import get_settings
 from core.eval.batch_runner import run_batch
 from core.eval.diagnosis_eval import evaluate_holdout
 from core.ingest.razorpay_client import RazorpayClient
-from core.ingest.synthetic import init_synthetic_schema, run_generation
+from core.ingest.synthetic import AtRiskRecord, init_synthetic_schema, run_generation
 from core.ledger import get_engine, init_ledger_schema, verify_chain
+from core.ledger.models import LedgerEvent
 from core.policy import activate_kill_switch, deactivate_kill_switch, is_kill_switch_active
 
 app = typer.Typer(
@@ -122,6 +123,41 @@ def generate_synthetic_data(
     for cohort, count in sorted(result.cohort_counts.items()):
         typer.echo(f"  {cohort:<28}: {count}")
     typer.echo(f"  {'held_out':<28}: {result.held_out_count}")
+
+
+@app.command(name="reset")
+def reset_command(
+    yes: bool = typer.Option(
+        False, "--yes", help="Skip the confirmation prompt (for scripted/CI use)."
+    ),
+) -> None:
+    """Wipe the ledger AND synthetic records for a genuine clean-slate demo run.
+
+    Unlike ``generate-synthetic-data --force`` (records only - the ledger
+    keeps its full append-only history by design, per
+    ``core/ledger/store.py``'s "no update or delete path exists here"), this
+    drops and recreates both tables. It is the only supported way back to a
+    state where check_idempotency, check_attempt_limits, etc. have no prior
+    history to replay - deterministic synthetic record IDs mean a repeated
+    --force against an already-used database silently pre-blocks every
+    treatment record on the next run-batch, since their idempotency keys
+    were already seen. Irreversible; confirm before running against a
+    database you care about.
+    """
+    settings = get_settings()
+    if not yes:
+        typer.confirm(
+            f"This permanently deletes ALL ledger events and synthetic records in "
+            f"{settings.database_url!r}. Continue?",
+            abort=True,
+        )
+
+    engine = get_engine(settings.database_url)
+    LedgerEvent.metadata.drop_all(engine, tables=[LedgerEvent.__table__, AtRiskRecord.__table__])
+    init_ledger_schema(engine)
+    init_synthetic_schema(engine)
+
+    typer.secho("reset complete: ledger and synthetic records cleared", fg=typer.colors.GREEN)
 
 
 @app.command(name="eval-diagnosis")
